@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EVA — improve session recording</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.css">
+<style>
+  body { background: #0b0e14; color: #d8dee9; font-family: system-ui, sans-serif;
+         display: flex; flex-direction: column; align-items: center; padding: 2rem; }
+  h1 { font-size: 1.1rem; font-weight: 500; color: #7aa2f7; }
+  #player { max-width: 1000px; width: 100%; }
+</style>
+</head>
+<body>
+<h1>EVA — improve run: „give yourself a soul" → gates → promotion (147 s)</h1>
+<div id="player"></div>
+<p style="max-width:1000px;font-size:.85rem;color:#8b95a7">
+  ★ Meilensteine sind als Marker in der Timeline anspringbar: Task-Eingabe → Candidate →
+  soul.md → Promotion-Request → 87/87 Checks → Supervisor-Gate → <b>Promoted v002</b>.
+  An jedem Meilenstein hält die Aufnahme kurz an und blendet einen Rahmen ein.
+</p>
+<script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.min.js"></script>
+<script>
+  AsciinemaPlayer.create('improve.cast', document.getElementById('player'), {
+    theme: 'dracula', fit: 'width', idleTimeLimit: 5, speed: 1.25, poster: 'npt:0:03',
+    controls: true
+  });
+</script>
+</body>
+</html>

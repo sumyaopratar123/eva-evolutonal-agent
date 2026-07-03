@@ -57,10 +57,17 @@ you'd call "the agent" — loop, tools, adapters, memory, self-model, TUI — is
   dropped, resource limits), optional **key-guard sidecar** so the API key never enters
   EVA's container, opt-in prompt-injection spotlighting, human-in-the-loop approvals.
 
-**EVA improving itself** — inspect → candidate → write + test → gated promotion:
+**EVA improving itself** — a real, unedited 3-minute session: asked to *"give yourself a
+soul"*, EVA creates a candidate, writes `soul.md`, protects it with a new ratchet check,
+passes 87/87 checks and both gates — and is promoted to **v002**:
 
 <p align="center">
-  <img src="docs/Eva-improve.gif" alt="EVA adds a skill registry to itself: inspects its architecture, builds a candidate, writes code + tests, passes the gates, requests promotion" width="920">
+  <img src="docs/Eva-improve.gif" alt="EVA improving itself: task input, candidate creation, soul.md + new ratchet check, 87/87 checks, supervisor + kernel gate, promotion to v002" width="920">
+</p>
+
+<p align="center">
+  <a href="https://arturkorb3.github.io/eva-evolutional-agent/#evolution">▶ Watch it interactively</a>
+  (crisp text, jump between milestones with <code>[</code>/<code>]</code>)
 </p>
 
 ## Quickstart
