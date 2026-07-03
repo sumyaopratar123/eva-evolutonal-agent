@@ -19,9 +19,9 @@ import os
 import re
 import shutil
 import sys
-import textwrap
 import threading
 import time
+import unicodedata
 
 try:  # comfort only: stdlib on Linux/macOS (present in the slim Docker image),
     import readline as _readline  # absent on bare Windows. NEVER a hard dependency.
@@ -241,6 +241,31 @@ def _is_table_sep(s: str) -> bool:
     return "-" in inner and set(inner) <= set("-: |")
 
 
+def _visible_len(s: str) -> int:
+    # On-screen width of a string: ANSI codes are invisible, and wide glyphs (emoji,
+    # CJK) occupy TWO terminal cells - counting them as 1 breaks table borders.
+    # Variation Selector-16 upgrades its base char (e.g. 🛠) to emoji presentation.
+    s = _ANSI_RE.sub("", s)
+    w, prev_w, prev_ri = 0, 0, False
+    for ch in s:
+        o = ord(ch)
+        ri = 0x1F1E6 <= o <= 0x1F1FF      # regional indicators pair up into ONE flag glyph
+        if unicodedata.combining(ch) or ch == "\u200d":
+            cw = 0
+        elif ch == "\ufe0f":
+            cw = 1 if prev_w == 1 else 0      # widen a narrow base to 2 cells total
+        elif ri and prev_ri:
+            cw = 0
+        elif unicodedata.east_asian_width(ch) in ("W", "F") or 0x1F000 <= o <= 0x1FAFF:
+            cw = 2
+        else:
+            cw = 1
+        w += cw
+        prev_w = cw if ch != "\ufe0f" else 2
+        prev_ri = ri and not prev_ri
+    return w
+
+
 def _term_width(default: int = 100) -> int:
     try:
         w = shutil.get_terminal_size((default, 24)).columns
@@ -249,18 +274,50 @@ def _term_width(default: int = 100) -> int:
         return default
 
 
+def _ansi_tokens(s: str) -> list:
+    # Split a string into atomic units: complete ANSI escape sequences and single chars.
+    out, last = [], 0
+    for m in _ANSI_RE.finditer(s):
+        out.extend(s[last:m.start()])
+        out.append(m.group(0))
+        last = m.end()
+    out.extend(s[last:])
+    return out
+
+
 def _wrap_cell(text: str, width: int) -> list:
     # Wrap one cell to its column width so a very long entry no longer blows the table
-    # past the terminal and breaks its borders. Long unbreakable tokens (e.g. URLs) are
-    # hard-split. Returns at least one (possibly empty) line.
+    # past the terminal and breaks its borders. Measures VISIBLE width (emoji and CJK
+    # take two cells), hard-splits long unbreakable tokens (e.g. URLs). Returns at
+    # least one (possibly empty) line.
+    width = max(1, width)
     lines: list = []
     for para in str(text or "").split("\n"):
-        lines.extend(textwrap.wrap(para, width=max(1, width),
-                                   break_long_words=True, break_on_hyphens=False) or [""])
-    return lines or [""]
+        cur = ""
+        for word in para.split(" "):
+            while _visible_len(word) > width:      # hard-split an oversized token
+                if cur:
+                    lines.append(cur)
+                    cur = ""
+                head = ""
+                for tok in _ansi_tokens(word):      # never split inside an ANSI code
+                    if _visible_len(head + tok) > width and head:
+                        break
+                    head += tok
+                lines.append(head)
+                word = word[len(head):]
+            cand = (cur + " " + word) if cur else word
+            if _visible_len(cand) > width:
+                lines.append(cur)
+                cur = word
+            else:
+                cur = cand
+        lines.append(cur)
+    lines = [ln for ln in lines if ln] or [""]
+    return lines
 
 
-def _render_table(block: list, max_width: "int | None" = None) -> str:
+def _render_table(block: list, max_width: "int | None" = None, *, color: bool = False) -> str:
     rows = [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in block]
     header, body = rows[0], rows[2:]      # rows[1] is the --- separator; drop it
     ncols = max(len(r) for r in rows)
@@ -269,10 +326,18 @@ def _render_table(block: list, max_width: "int | None" = None) -> str:
         return r + [""] * (ncols - len(r))
 
     header, body = pad(header), [pad(r) for r in body]
+    # Render inline markdown (**bold**, `code`) inside cells BEFORE measuring and
+    # wrapping, so widths reflect the text as it will actually appear. Without colour
+    # the markers are simply stripped - a re-laid-out box table keeping literal ** would
+    # only add noise (prose keeps its markers; cells are reformatted anyway).
+    def cell(c):
+        return _md_inline(c, color=True) if color else _MD_BOLD.sub(r"\1", _MD_CODE.sub(r"\1", c))
+    header = [cell(c) for c in header]
+    body = [[cell(c) for c in r] for r in body]
     widths = [0] * ncols
     for r in [header] + body:
         for i, c in enumerate(r):
-            widths[i] = max(widths[i], len(c))
+            widths[i] = max(widths[i], _visible_len(c))
 
     # Keep the whole table within the terminal (or a given max) width: shrink the widest
     # columns and WRAP their cells instead of letting a huge entry break the borders.
@@ -290,8 +355,14 @@ def _render_table(block: list, max_width: "int | None" = None) -> str:
         height = max(len(w) for w in wrapped)
         out = []
         for k in range(height):
-            segs = [(wrapped[i][k] if k < len(wrapped[i]) else "").ljust(widths[i])
-                    for i in range(ncols)]
+            segs = []
+            for i in range(ncols):
+                s = wrapped[i][k] if k < len(wrapped[i]) else ""
+                if color and "\x1b[" in s:
+                    s += _CODES["reset"]      # a wrapped style span must not bleed into borders
+                # Pad by VISIBLE width, so ANSI codes and wide glyphs (emoji) never
+                # push the borders out of alignment.
+                segs.append(s + " " * max(0, widths[i] - _visible_len(s)))
             out.append("\u2502" + "\u2502".join(f" {s} " for s in segs) + "\u2502")
         return out
 
@@ -328,7 +399,7 @@ def render_markdown_tables(text: str) -> str:
 
 
 _MD_HEADING = re.compile(r"^(#{1,3})\s+(.+)$")
-_MD_BULLET = re.compile(r"^(\s*)-\s+(?=\S)")
+_MD_BULLET = re.compile(r"^(\s*)[-*]\s+(?=\S)")   # '* ' too; '**bold' has no space, so it never matches
 _MD_CODE = re.compile(r"`([^`\n]+)`")
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 
@@ -390,7 +461,7 @@ def render_markdown(text: str, *, color: bool = True) -> str:
                 block.append(lines[i])
                 i += 1
             try:
-                out.append(_render_table(block))
+                out.append(_render_table(block, color=color))
             except Exception:
                 out.extend(block)      # never let rendering swallow content
             continue
@@ -842,7 +913,7 @@ class StatusView:
             self._said_prefix = True
             self._raw("\n")
         try:
-            self._w(_render_table(self._tbl))
+            self._w(_render_table(self._tbl, color=self.color))
         except Exception:
             for row in self._tbl:
                 self._w(row)

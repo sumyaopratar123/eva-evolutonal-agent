@@ -1531,6 +1531,37 @@ def check_tui_renders_markdown_beyond_tables():
     assert "**not bold**" in stream_plain                       # fence protected live too
 
 
+def check_tui_table_cells_render_inline_and_align_wide_glyphs():
+    """Markdown table CELLS render inline styling (**bold** shows styled, not as literal
+    asterisks) and column borders stay aligned even with double-width glyphs (emoji/CJK),
+    measured by VISIBLE width instead of len(); '* ' bullets render as dots like '- '
+    bullets, while colour-off prose still passes through unchanged."""
+    import tui
+    md = ("| Eigenschaft | Wert |\n|---|---|\n"
+          "| **Version** | v001 |\n| **Modus** | \U0001F50D Review |")
+    out = tui.render_markdown(md, color=True)
+    plain = tui._ANSI_RE.sub("", out)
+    assert "**Version**" not in plain and "Version" in plain   # bold rendered in cells
+    assert "\x1b[1m" in out                                    # ANSI bold applied
+    assert "\U0001F50D" in plain                               # emoji kept
+    widths = {tui._visible_len(l) for l in out.splitlines()}
+    assert len(widths) == 1, widths                            # borders aligned (emoji = 2 cells)
+    assert tui._visible_len("\U0001F50D") == 2 and tui._visible_len("ab") == 2
+    assert tui._visible_len("\U0001F6E0\uFE0F") == 2          # VS16 emoji = 2 cells
+    assert tui._visible_len("\U0001F1E9\U0001F1EA") == 2      # flag pair = ONE glyph
+    # colour off: cells are re-laid-out anyway, so literal ** markers are stripped
+    cf = tui.render_markdown(md, color=False)
+    assert "**Version**" not in cf and "Version" in cf
+    widths_cf = {tui._visible_len(l) for l in cf.splitlines()}
+    assert len(widths_cf) == 1, widths_cf
+    # '* ' bullets render like '- ' bullets; '**bold' at line start stays bold
+    assert tui._ANSI_RE.sub("", tui.render_markdown_line("* punkt", color=True)) == "\u2022 punkt"
+    assert "\u2022" not in tui.render_markdown_line("**fett** rest", color=True)
+    # colour off keeps prose byte-identical (markers preserved, nothing lost)
+    prose = "text **fett**\n* eins\n- zwei"
+    assert tui.render_markdown(prose, color=False) == prose
+
+
 def check_tool_progress_hook_and_spinner_are_tty_gated():
     """The runtime calls its progress hook right before a slow op (so the TUI can show a live
     elapsed timer during a long shell/fetch), and the TUI spinner writes NOTHING to a non-TTY
