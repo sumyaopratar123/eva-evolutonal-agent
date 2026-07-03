@@ -179,7 +179,7 @@ def brief(release: pathlib.Path | None = None) -> str:
         f"docs: read your own anatomy, {len(skills(release))} skills and "
         f"{len(capabilities(release))} ratchet-pinned capabilities ON DEMAND via the "
         f"inspect_self tool (topics: overview | anatomy | skills | capabilities | "
-        f"policy | sandbox | model | a filename | a capability name)."
+        f"policy | sandbox | model | lineage | a filename | a capability name)."
     )
 
 
@@ -242,6 +242,56 @@ def backend(release: pathlib.Path | None = None) -> str:
             f"your model wiring, NOT part of your code/self-model.")
 
 
+def _organism_root() -> pathlib.Path | None:
+    """The organism root (where state/ lives). From ORGANISM_ROOT, or derived from a
+    RELEASE path of the canonical shape <root>/runtime/releases/<name>."""
+    env = os.environ.get("ORGANISM_ROOT")
+    if env:
+        return pathlib.Path(env).resolve()
+    parts = RELEASE.parts
+    if len(parts) >= 3 and parts[-3] == "runtime" and parts[-2] == "releases":
+        return RELEASE.parents[2]
+    return None
+
+
+def lineage(release: pathlib.Path | None = None, limit: int = 12) -> str:
+    """EVA's evolution history, read from the kernel's release ledger: where the
+    current release came from (promotions with their reasons) and any rollbacks.
+    The self-model is otherwise a snapshot of NOW; this is the only view of BECOMING -
+    it lets EVA avoid re-proposing an idea that was already promoted or rolled back."""
+    root = _organism_root()
+    ledger = (root / "state" / "release_ledger.jsonl") if root else None
+    rows = []
+    if ledger and ledger.exists():
+        for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+    if not rows:
+        return ("Lineage: no evolution history yet - this is the seed generation "
+                "(no promotion or rollback has been recorded in the release ledger).")
+
+    def _name(rel):
+        return str(rel or "?").replace("\\", "/").rsplit("/", 1)[-1]
+
+    lines = [f"Lineage (release ledger, most recent last; you are {version(release)}):"]
+    for e in rows[-limit:]:
+        kind = e.get("kind")
+        if kind == "promoted":
+            reason = _first_sentence(str(e.get("reason", "")), 80)
+            lines.append(f"  - {_name(e.get('parent'))} -> {_name(e.get('release'))} promoted"
+                         + (f": {reason}" if reason else ""))
+        elif kind == "rollback":
+            lines.append(f"  - {_name(e.get('from'))} -> {_name(e.get('to'))} ROLLED BACK")
+    if len(rows) > limit:
+        lines.insert(1, f"  (... {len(rows) - limit} earlier entries omitted)")
+    return "\n".join(lines)
+
+
 def lookup(topic: str | None = None, release: pathlib.Path | None = None) -> str:
     """Single entry point for on-demand self-inspection (used by the inspect_self
     tool). Routes a topic word to the right slice of the self-model."""
@@ -275,6 +325,8 @@ def lookup(topic: str | None = None, release: pathlib.Path | None = None) -> str
         return sandbox(release)
     if t in ("model", "provider", "backend", "llm", "adapter"):
         return backend(release)
+    if t in ("lineage", "history", "ledger", "evolution", "generations"):
+        return lineage(release)
     return detail(topic or "", release)
 
 

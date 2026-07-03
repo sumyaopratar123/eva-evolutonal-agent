@@ -253,10 +253,11 @@ def evolve_one():
     return True
 
 
-def pivot_task(signature, reason):
+def pivot_task(signature, reason, context=""):
+    evidence = f"\nObserved failure (evidence from the work session):\n{context}\n" if context else ""
     return ("A repeated friction was detected during work and the user approved a "
             "self-improvement pivot.\n\n"
-            f"Friction signature: {signature}\nContext: {reason}\n\n"
+            f"Friction signature: {signature}\nContext: {reason}\n{evidence}\n"
             "Create a candidate release that removes the root cause. Add or strengthen "
             "a check in tests.py so this class is caught in future. Never weaken gates. "
             "Request promotion only if the candidate is coherent.")
@@ -273,7 +274,8 @@ def handle_pivot_then_promotion():
         pivot_signature = req.get("signature", "")
         print("\n=== Pivot: improve cycle for", pivot_signature, "===")
         log("pivot_started", {"signature": pivot_signature})
-        run_agent("improve", pivot_task(pivot_signature, req.get("reason", "")))
+        run_agent("improve", pivot_task(pivot_signature, req.get("reason", ""),
+                                        req.get("context", "")))
         log("pivot_finished", {"signature": pivot_signature})
     qualified = handle_promotion_request()
     if pivot_signature and qualified:

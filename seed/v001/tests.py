@@ -1988,6 +1988,90 @@ def check_free_text_at_approval_prompt_reaches_the_model():
     assert "llm-gated way" in obs.output and "instruction" in obs.output.lower()
 
 
+def check_self_model_lineage_reads_release_ledger():
+    """inspect_self('lineage') is EVA's view of its own BECOMING: it renders the
+    kernel's release ledger (promotions with reasons, rollbacks) and degrades to an
+    explicit seed-generation message when no history exists yet - it must never crash."""
+    import self_model
+
+    orig_root = os.environ.get("ORGANISM_ROOT")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["ORGANISM_ROOT"] = td
+            # no ledger yet -> graceful seed-generation answer via the lookup route
+            text = self_model.lookup("lineage")
+            assert "no evolution history" in text.lower()
+            state = pathlib.Path(td) / "state"
+            state.mkdir()
+            rows = [
+                {"kind": "promoted", "parent": "releases/v001", "release": "releases/v002",
+                 "reason": "add web_search skill. And more."},
+                {"kind": "rollback", "from": "releases/v002", "to": "releases/v001"},
+            ]
+            (state / "release_ledger.jsonl").write_text(
+                "\n".join(json.dumps(r) for r in rows) + "\nnot json\n", encoding="utf-8")
+            for topic in ("lineage", "history", "ledger"):
+                text = self_model.lookup(topic)
+                assert "v001 -> v002 promoted" in text, text
+                assert "add web_search skill" in text and "And more" not in text
+                assert "ROLLED BACK" in text
+    finally:
+        if orig_root is None:
+            os.environ.pop("ORGANISM_ROOT", None)
+        else:
+            os.environ["ORGANISM_ROOT"] = orig_root
+
+
+def check_pivot_request_hands_over_concrete_evidence():
+    """A pivot must hand the improve cycle the CONCRETE observed failure, not only the
+    abstract signature: maybe_pivot writes the most recent backlog detail/need for the
+    signature into pivot_request.json as `context`."""
+    import agent
+
+    class _Yes:
+        def confirm(self, prompt):
+            return True
+
+    with tempfile.TemporaryDirectory() as td:
+        td = pathlib.Path(td)
+        orig = (agent.BACKLOG, agent.PIVOT_REQUEST, agent.PIVOT_THRESHOLD, agent.ensure_dirs)
+        try:
+            agent.BACKLOG = td / "backlog.jsonl"
+            agent.PIVOT_REQUEST = td / "pivot_request.json"
+            agent.PIVOT_THRESHOLD = 2
+            agent.ensure_dirs = lambda: None
+            rows = [
+                {"kind": "execution_error", "signature": "shell:exit=127:pdftotext",
+                 "detail": "exit=127\nstderr:\npdftotext: command not found"},
+                {"kind": "execution_error", "signature": "shell:exit=127:pdftotext",
+                 "detail": "exit=127\nstderr:\npdftotext: still not found"},
+            ]
+            agent.BACKLOG.write_text(
+                "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+            assert agent.maybe_pivot("shell:exit=127:pdftotext", "work", _Yes())
+            req = json.loads(agent.PIVOT_REQUEST.read_text(encoding="utf-8"))
+            assert req["signature"] == "shell:exit=127:pdftotext"
+            # the LATEST evidence wins, and it is the raw observed failure
+            assert "still not found" in req["context"]
+        finally:
+            agent.BACKLOG, agent.PIVOT_REQUEST, agent.PIVOT_THRESHOLD, agent.ensure_dirs = orig
+
+
+def check_pivot_task_carries_evidence_into_improve_cycle():
+    """The supervisor's improve task for a pivot embeds the handed-over evidence so the
+    improver sees WHAT failed, not just a signature; with no evidence the task still
+    reads cleanly (no dangling evidence header)."""
+    import supervisor
+
+    task = supervisor.pivot_task("shell:exit=127:pdftotext", "Repeated friction.",
+                                 "exit=127\nstderr:\npdftotext: command not found")
+    assert "shell:exit=127:pdftotext" in task
+    assert "pdftotext: command not found" in task
+    assert "Observed failure" in task
+    bare = supervisor.pivot_task("sig", "reason")
+    assert "Observed failure" not in bare and "sig" in bare
+
+
 def _all_checks():
     return [v for k, v in sorted(globals().items())
             if k.startswith(("check_", "test_")) and callable(v)]

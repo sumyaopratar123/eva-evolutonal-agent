@@ -66,12 +66,14 @@ INSPECT_SELF_TOOL = Tool(
     description="Read your OWN self-model on demand - you are a self-evolving agent "
                 "and are not preloaded with full docs. Returns your anatomy "
                 "(file->role), skills (tools), ratchet-pinned capabilities, the "
-                "per-mode security policy, the current sandbox (safe/free), or your live "
-                "model/provider backend. `topic` selects the slice: 'overview' (default), "
-                "'anatomy', 'skills', 'capabilities', 'policy', 'sandbox', 'model', or the name "
-                "of a file/capability/skill for detail (a filename also returns that "
-                "module's docstring). Use it before editing yourself so you target the "
-                "right file.",
+                "per-mode security policy, the current sandbox (safe/free), your live "
+                "model/provider backend, or your evolution lineage (promotions/rollbacks "
+                "from the release ledger). `topic` selects the slice: 'overview' (default), "
+                "'anatomy', 'skills', 'capabilities', 'policy', 'sandbox', 'model', 'lineage', "
+                "or the name of a file/capability/skill for detail (a filename also returns "
+                "that module's docstring). Use it before editing yourself so you target the "
+                "right file - and check 'lineage' before proposing an evolution, so you do "
+                "not repeat one that was already promoted or rolled back.",
     input_schema={
         "type": "object",
         "properties": {"topic": {"type": "string"}},

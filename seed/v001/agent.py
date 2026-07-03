@@ -467,6 +467,20 @@ def backlog_summary(limit: int = 8) -> str:
     return "\n".join(f"{c}x  {s}" for s, c in items[:limit]) or "(none)"
 
 
+def backlog_latest_detail(signature: str) -> str:
+    """The most recent recorded evidence (detail/need text) for a signature. Used to
+    hand the CONCRETE failure over to the improve cycle on a pivot, instead of only
+    the abstract signature - the improver then sees what actually went wrong."""
+    detail = ""
+    for rec in _iter_backlog():
+        if rec.get("signature") != signature or rec.get("kind") == "resolved":
+            continue
+        text = str(rec.get("detail") or rec.get("need") or "").strip()
+        if text:
+            detail = text
+    return detail
+
+
 def record_shell_friction(observation_text: str, mode: str) -> str | None:
     """Record a shell FAILURE as friction - but only a real one.
 
@@ -533,7 +547,7 @@ def maybe_pivot(signature: str, mode: str, human, *, kind: str = "friction") -> 
         return False
     PIVOT_REQUEST.write_text(json.dumps({
         "signature": signature, "from_release": str(RELEASE), "time": time.time(),
-        "reason": reason,
+        "reason": reason, "context": backlog_latest_detail(signature),
     }, indent=2), encoding="utf-8")
     backlog_append({"kind": "pivot_requested", "mode": mode, "signature": signature})
     print("Pivot requested. Finishing this work session so an improve cycle can run.")
