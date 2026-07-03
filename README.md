@@ -48,36 +48,30 @@ EVA is initially released from the **seed** — the **smallest viable organism p
 |---|---|---|
 | Architecture | fixed, shipped up front | evolves through generations |
 | Self-improvement | prompt/config tweaks | rewrites its own **code** as a gated release |
-| Safety of self-change | manual / none | ratchet + independent **kernel gate** + rollback ledger |
+| Safety of self-change | manual / none | layered gates: test **ratchet** · independent **kernel gate** · gated **prompt surface** · rollback ledger |
 | New capability | you code a plugin | **earned from real usage and self-inspection**, then promoted |
 
 
 ## The idea in one picture
 
-```mermaid
-flowchart TB
-    subgraph boot["bootstrap · runs once"]
-        direction LR
-        K["<b>organism.py</b><br/>immutable kernel"] -->|seeds| S["<b>seed/v001</b><br/>genome · hash-pinned"]
-        S -->|"verify SHA-256<br/>+ materialize"| R["<b>runtime/releases/v1</b><br/>first live release"]
-    end
+```
+bootstrap · runs once
 
-    R ==> VN
+  organism.py (immutable kernel)
+     │  seeds + verifies SHA-256
+     ▼
+  seed/v001 (hash-pinned genome) ──materialize──▶ runtime/releases/v1 (first live release)
 
-    subgraph loop["evolution loop"]
-        direction LR
-        VN["runtime/releases/<b>vN</b><br/>live release"] -->|EVA edits itself| C["<b>vN-candidate</b>"]
-        C -->|verify| G{"gates<br/>tests · ratchet<br/>kernel_gate"}
-        G -->|"pass → promote"| VN1["<b>vN+1</b><br/>new live release"]
-        G -->|fail → discard| VN
-        VN1 -->|becomes the live vN| VN
-        VN1 -.->|rollback via ledger| VN
-    end
+evolution loop · every self-change afterwards
 
-    classDef immutable stroke:#e11d48,stroke-width:2px;
-    classDef gate stroke:#2563eb,stroke-width:2px;
-    class K immutable;
-    class G gate;
+  vN (live release)
+     │  EVA edits a COPY of itself — never the running code
+     ▼
+  vN-candidate
+     │  gates: tests · ratchet · smoke + dry-runs · kernel_gate
+     │      fail → candidate discarded, vN stays live
+     ▼  pass → promote
+  vN+1 (the new live release) — recorded in the ledger; `rollback` steps back through it
 ```
 
 - **`organism.py`** is the kernel: ~600 lines, baked into the image, **not**
@@ -111,14 +105,12 @@ EVA can self-change itself in **two modes**, and both land the same way — a
   improvement to its own release, announces what it will change and why in a
   sentence, then builds it as a candidate the same way.
 
-You steer `improve`; EVA steers `evolve` — but neither ever mutates the running
-code. Every self-change is a gated, reversible candidate.
-
 Every session feeds a persistent **friction backlog** (`data/state/backlog.jsonl`):
-real shell/model failures are recorded with an error-specific signature.
-Usefulness is *grown from real failures*, not designed up front. When the same
-friction recurs (default 3×), EVA offers to **pivot** to an `improve` cycle aimed
-at the root cause — a clean phase change, never live mutation.
+failed shell commands, provider errors, crashes and capability gaps are each
+recorded under a stable, error-specific signature. Usefulness is *grown from real
+friction*, not designed up front. When the same signature recurs, EVA
+offers to **pivot** to an `improve` cycle aimed at the root cause — a clean phase
+change, never live mutation.
 
 Beyond failures, EVA also learns from **user needs**: when a request reveals a
 capability it lacks (or can only do awkwardly), it records it with a stable
@@ -126,20 +118,39 @@ signature (`note_evolution_need`). A one-off is just handled; only a need that
 **recurs** — tracked across sessions — is proposed as a real skill to build and
 promote. New abilities are *earned from what you actually keep asking for*.
 
-A self-change only goes live after it clears the gates — the LLM-free checks
-(including **golden traces** that drive the real provider adapters over recorded
-responses) and three standing guarantees:
+A self-change goes live only after it survives the whole gate stack: the release's
+full LLM-free suite — unit checks, smoke, dry-runs of every mode, qualification
+rounds, and **golden traces** that replay recorded provider responses through the
+real adapters — plus the standing guarantees on top:
 
-1. **The ratchet** — a fix must add/strengthen a test; a candidate may never run
-   *fewer* checks than the current release (counted by what actually executes,
-   not by source text).
-2. **Multi-level rollback** — every promotion is recorded in the release ledger,
-   so `rollback` can step back more than one version.
-3. **A constitution in the immutable kernel** — `kernel_gate` independently
-   verifies a candidate keeps EVA's core identity (a friction memory + a
-   self-improvement path) and rehashes the promoted release's manifest so it can
-   never lie about its own content. These checks live where the agent can't edit
-   them.
+1. **The ratchet** — a candidate may never *execute* weaker checks than the live
+   release, and a fix is expected to add or strengthen one. Counted by what
+   actually runs, not by source text, so dead or unreachable tests don't inflate it.
+2. **A constitution in the immutable kernel** — `kernel_gate` re-verifies the
+   candidate from outside the agent's reach: it pins the exact bodies of a small
+   set of constitutional checks (the mode-permission matrix, the exact mode set,
+   the ratchet's own integrity, the provider-neutral core seam) and rehashes the
+   promoted release's manifest — so a release can neither weaken its identity nor
+   lie about its own content.
+3. **A gated prompt surface** *(opt-in)* — system prompts and tool descriptions
+   are screened like code: a candidate's prompt-surface diff runs through
+   deterministic rules and, optionally, a nonce-guarded, fail-closed LLM judge.
+4. **Multi-level rollback** — every promotion lands in the release ledger;
+   `rollback` walks back through it, one version or several.
+
+## EVA knows itself
+
+Self-inspection is a first-class capability — and it cannot go stale, because EVA's
+self-model is **generated from the live code on every run**: anatomy from the release
+manifest, skills from its tool definitions, guaranteed capabilities from its own test
+suite, its security boundaries from the mode-policy table. Ask it (`inspect_self` —
+overview · anatomy · skills · capabilities · policy · sandbox · model) and it answers
+from the release it is *actually running*, down to which sandbox and model it is on
+right now.
+
+The consequence is elegant: a promotion updates EVA's self-image automatically, and a
+behaviour shipped without a pinned check is invisible to EVA's future self *and*
+unprotected by the ratchet — so self-knowledge and reality cannot drift apart.
 
 ## Quickstart
 
@@ -188,8 +199,11 @@ eva build                                                  # (re)build the sandb
 ## Using EVA
 
 **Approvals.** Risky actions prompt `Approve shell? [y/N/f]` — press **`f`** to
-reveal the full command/diff before deciding. Set `EVA_TUI_FULL=1` to expand
-commands and output in the live view.
+reveal the full command/diff first; a free-text reply declines *and* steers EVA
+with your words. Set `EVA_TUI_FULL=1` to expand commands and output in the live
+view. For hands-off runs there is an **autonomous mode** with no per-step
+approvals — `--yes --allow-shell` (or `ORGANISM_AUTO_YES=1` /
+`ORGANISM_ALLOW_SHELL=1` in `.env`); the Docker sandbox stays the containment.
 
 **Images.** With a vision-capable model, reference a local image path, Markdown
 `![](shot.png)`, or type `/paste` for your latest screenshot. On Windows, `eva`/`eva improve`
