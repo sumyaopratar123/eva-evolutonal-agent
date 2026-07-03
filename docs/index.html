@@ -207,8 +207,13 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
 <section id="evolution">
   <div class="kicker k-purple">02 · evolution</div>
   <h2><span class="hash">#</span>How it evolves</h2>
+  <p>EVA evolves the way organisms do: a <b>mutation</b> (the candidate) is expressed in a
+  copy, <b>selection pressure</b> (the gates) decides whether it survives, and only then does
+  a new <b>generation</b> go live. The crucial difference to nature: selection here is not
+  random death but an explicit, layered test — and every generation is in the ledger, so
+  evolution can step backwards.</p>
   <p>Self-change comes in <b>two modes</b>; both land the same way — <b>candidate → tests →
-  gated promotion</b> — and differ only in <em>who picks the change</em>:</p>
+  gated promotion</b> — and differ only in <em>who picks the mutation</em>:</p>
   <div class="grid c2">
     <div class="card"><span class="ic">🎯</span><h4>improve — directed</h4>
       <p>You hand EVA one concrete task (e.g. <em>"design and implement a skill registry"</em>).
@@ -226,7 +231,8 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
   <img class="gif" src="Eva-improve.gif" alt="EVA improving itself — inspect → candidate → write + test → gated promotion">
 
   <h3>Grown from friction, not designed up front</h3>
-  <p>Every session feeds a persistent <b>friction backlog</b>: failed shell commands, provider
+  <p>Where does the pressure to evolve come from? From the <b>environment</b> — real usage.
+  Every session feeds a persistent <b>friction backlog</b>: failed shell commands, provider
   errors, crashes and capability gaps are each recorded under a stable, error-specific
   signature. When the same signature recurs, EVA offers to <b>pivot</b> to an
   <code>improve</code> cycle aimed at the root cause — a clean phase change, never live mutation.</p>
@@ -241,6 +247,9 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
 <section id="gates">
   <div class="kicker k-green">03 · the gate stack</div>
   <h2><span class="hash">#</span>Every self-change must survive this</h2>
+  <p>The seed ships with an <b>immune system</b>, and this is it at work: anything foreign to
+  EVA's constitution — a weakened check, a lying manifest, a manipulated prompt — is rejected
+  before it can become part of the organism.</p>
   <p>A candidate goes live only after the release's full LLM-free suite — unit checks, smoke,
   dry-runs of every mode, qualification rounds, and <b>golden traces</b> that replay recorded
   provider responses through the real adapters — plus the standing guarantees on top:</p>
@@ -270,7 +279,8 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
 <section id="self">
   <div class="kicker k-cyan">04 · self-knowledge</div>
   <h2><span class="hash">#</span>EVA knows itself</h2>
-  <p>Self-inspection is a first-class capability — and it cannot go stale, because EVA's
+  <p>Call it proprioception: EVA senses its own body. Self-inspection is a first-class
+  capability — and it cannot go stale, because EVA's
   self-model is <b>generated from the live code on every run</b>: anatomy from the release
   manifest, skills from its tool definitions, guaranteed capabilities from its own test suite,
   its security boundaries from the mode-policy table. Ask it (<code>inspect_self</code> —
