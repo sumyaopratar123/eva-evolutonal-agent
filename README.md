@@ -265,14 +265,11 @@ data/                created at runtime; all evolution lives here (git-ignored)
 
 ## EVA tries to stay good
 
-Self-modification is only safe if EVA can't quietly weaken its own guardrails. The
-defenses are **layered**, and each lives where the layer it protects can't edit it:
+Self-modification is only safe if EVA can't quietly weaken its own guardrails.
+Every self-change already has to survive the gate stack above — ratchet, kernel
+constitution, prompt-surface audit, ledger. The remaining defenses run at
+**runtime**, and each lives where the layer it protects can't edit it:
 
-- **Gated self-change — code *and* prompts.** No edit ever goes live in place:
-  every change is a candidate that must survive the gate stack above — the
-  ratchet, the kernel constitution, the opt-in prompt-surface audit
-  (`EVA_PROMPT_AUDIT`, deterministic rules + a nonce-guarded, **fail-closed** LLM
-  judge), and the ledger with rollback.
 - **Untrusted content stays untrusted** *(opt-in)*. Tool and web output is framed
   as data, not instructions (**spotlighting**), so a prompt injection hidden in a
   fetched page can't quietly redirect EVA (`EVA_PROMPT_SPOTLIGHT`).
