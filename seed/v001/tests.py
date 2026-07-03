@@ -1988,6 +1988,131 @@ def check_free_text_at_approval_prompt_reaches_the_model():
     assert "llm-gated way" in obs.output and "instruction" in obs.output.lower()
 
 
+def check_tui_recalls_clipped_tool_output_on_demand():
+    """Information is folded away, never lost: the live stream clips tool output, but
+    /last re-shows a recent result IN FULL, and /full toggles the detail view live
+    (no restart, no env var). The wired /last, /full and /status commands are handled
+    locally by _prompt_user and never reach the model."""
+    import io
+    import tui
+    import agent
+
+    buf = io.StringIO()
+    v = tui.StatusView(mode="work", stream=buf, color=False)
+    long_out = "exit=1\nstdout:\nstderr:\n" + "\n".join(f"line-{i} boom" for i in range(40))
+    v.observation(core.ToolObservation("1", "shell", long_out))
+    clipped = buf.getvalue()
+    assert "line-39 boom" not in clipped, "live view must stay compact"
+    v.show_last()
+    assert "line-39 boom" in buf.getvalue(), "/last must reveal the full output"
+    # /last 2 reaches further back; an out-of-range recall degrades to a notice
+    v.observation(core.ToolObservation("2", "read_file", "second result"))
+    n0 = buf.getvalue()
+    v.show_last("2")
+    assert "line-39 boom" in buf.getvalue()[len(n0):]
+    v.show_last("99")
+    assert "kept" in buf.getvalue().splitlines()[-1]
+    # /full flips live and sticks
+    assert v.toggle_full() is True and v.full
+    assert v.toggle_full() is False and not v.full
+    # commands are wired: handled locally, then the real message passes through
+    calls = []
+
+    class _V:
+        full = False
+
+        def __init__(self, lines):
+            self._lines = list(lines)
+
+        def ask(self, history_file=None):
+            return self._lines.pop(0)
+
+    cmds = {"/last": lambda a: calls.append(("last", a)),
+            "/full": lambda a: calls.append(("full", a)),
+            "/status": lambda a: calls.append(("status", a))}
+    got = agent._prompt_user(_V(["/status", "/last 2", "/full", "real message"]), cmds)
+    assert got == "real message"
+    assert calls == [("status", ""), ("last", "2"), ("full", "")]
+    # and they are advertised in /help
+    help_txt = tui.format_slash_help(color=False)
+    assert "/status" in help_txt and "/last" in help_txt and "/full" in help_txt
+
+
+def check_status_command_gives_one_glance_state():
+    """/status renders the live session state in one glance: mode, release, identity,
+    session, sandbox, a pending pivot and the friction backlog - state the user
+    otherwise has to reconstruct from scattered lines."""
+    import io
+    import tui
+    import agent
+
+    rows = [("mode", "work"), ("backlog", "2x  gap:pdf\n1x  shell:exit=1:x")]
+    text = tui.format_status(rows, color=False)
+    assert "Session status" in text and "mode" in text and "2x  gap:pdf" in text
+    assert "1x  shell:exit=1:x" in text  # multi-line values keep every line
+
+    class _Sess:
+        def events(self):
+            return [1, 2, 3]
+
+    class _State:
+        identity = {"adapter": "fake", "model": "m-1"}
+        session_id = "s-42"
+        session = _Sess()
+
+    buf = io.StringIO()
+    v = tui.StatusView(mode="work", stream=buf, color=False)
+    with tempfile.TemporaryDirectory() as td:
+        orig = agent.PIVOT_REQUEST
+        try:
+            agent.PIVOT_REQUEST = pathlib.Path(td) / "pivot_request.json"
+            agent._cmd_status(_State(), v, "work")
+            out = buf.getvalue()
+            assert "work" in out and "m-1" in out and "s-42 (3 events)" in out
+            assert "pivot" in out and "none" in out
+            agent.PIVOT_REQUEST.write_text(json.dumps({"signature": "gap:pdf"}),
+                                           encoding="utf-8")
+            agent._cmd_status(_State(), v, "work")
+            assert "PENDING: gap:pdf" in buf.getvalue()
+        finally:
+            agent.PIVOT_REQUEST = orig
+
+
+def check_turn_summary_and_visible_friction():
+    """UX transparency: (a) a busy agent turn (2+ tool calls) closes with a one-line
+    recap (tool count, failures, elapsed) while short turns stay clean; (b) the moment
+    friction/a capability gap is recorded, run_mode surfaces it with its recurrence
+    count against the pivot threshold - the pivot prompt never comes out of nowhere."""
+    import io
+    import tui
+    import agent
+    import inspect
+
+    buf = io.StringIO()
+    v = tui.StatusView(mode="work", stream=buf, color=False)
+    # a short turn (1 tool call) adds no recap noise
+    v.begin_turn()
+    v.tool_call(core.ToolCall("1", "read_file", {"path": "a"}))
+    v.end_turn()
+    assert "turn:" not in buf.getvalue()
+    # a busy turn with a failure gets a one-line recap
+    v.begin_turn()
+    v.tool_call(core.ToolCall("1", "shell", {"cmd": "x"}))
+    v.observation(core.ToolObservation("1", "shell", "exit=1\nstderr:\nboom"))
+    v.tool_call(core.ToolCall("2", "shell", {"cmd": "y"}))
+    v.observation(core.ToolObservation("2", "shell", "exit=0\nstdout:\nok"))
+    v.end_turn()
+    recap = buf.getvalue()
+    assert "turn: 2 tool calls" in recap and "1 failed" in recap
+
+    # run_mode makes recorded friction visible on BOTH paths (shell friction and
+    # capability gaps), including the recurrence count against the threshold.
+    src = inspect.getsource(agent.run_mode)
+    assert src.count("_show_friction(sig)") >= 2
+    assert "backlog_count" in inspect.getsource(agent.run_mode)
+    assert "PIVOT_THRESHOLD" in src
+
+
 def check_self_model_lineage_reads_release_ledger():
     """inspect_self('lineage') is EVA's view of its own BECOMING: it renders the
     kernel's release ledger (promotions with reasons, rollbacks) and degrades to an

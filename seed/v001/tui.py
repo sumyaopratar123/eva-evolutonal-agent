@@ -188,6 +188,9 @@ def format_welcome(mode: str, identity: dict, release: str, *,
 
 _SLASH_COMMANDS = (
     ("/help", "show this list of in-chat commands"),
+    ("/status", "one-glance session state: mode, release, model, backlog, pivot"),
+    ("/last", "re-show the last tool result IN FULL (or /last 2 for the one before)"),
+    ("/full", "toggle full detail view (commands + tool output uncut) for this session"),
     ("/model", "show or switch the model within the current provider, e.g. /model gpt-5.5"),
     ("/resume", "list work sessions, or switch to one: /resume <id>  (work mode)"),
     ("/paste", "attach your most recent screenshot (take one with Win+Shift+S first)"),
@@ -209,6 +212,20 @@ def format_slash_help(*, color: bool = True) -> str:
         "gray", color=color))
     lines.append("")
     return "\n".join(lines)
+
+
+def format_status(rows, *, color: bool = True) -> str:
+    """One-glance session state for /status: aligned key/value lines; a multi-line
+    value (e.g. the backlog summary) indents under its key. Pure function."""
+    rows = [(str(k), str(v)) for k, v in rows]
+    width = max((len(k) for k, _ in rows), default=0)
+    out = ["", _paint("  Session status", "bold", color=color)]
+    for k, v in rows:
+        lines = v.splitlines() or [""]
+        out.append("  " + _paint(k.ljust(width), "cyan", color=color) + "  " + lines[0])
+        out.extend("  " + " " * width + "  " + l for l in lines[1:])
+    out.append("")
+    return "\n".join(out)
 
 
 def _is_table_row(s: str) -> bool:
@@ -491,6 +508,11 @@ class StatusView:
         # Live elapsed-time spinner for long tool calls (real TTY only).
         self._spin_stop = None
         self._spin_thread = None
+        # Recent tool results, kept so /last can re-show one IN FULL after the live
+        # stream clipped it - information is folded away, never lost.
+        self._recent_obs = []
+        # Per-turn activity counters for the end-of-turn one-line summary.
+        self._turn = None
         # Lazily created comfortable input prompt (readline editing + history).
         self._prompt = None
 
@@ -584,6 +606,47 @@ class StatusView:
     def notice(self, msg: str) -> None:
         """A small dim status line for in-chat command feedback (/model, /provider, /resume)."""
         self._w(_paint("  " + msg, "gray", color=self.color))
+
+    def status(self, rows) -> None:
+        """Render the /status one-glance state (list of (key, value) pairs)."""
+        self._w(format_status(rows, color=self.color))
+
+    def toggle_full(self) -> bool:
+        """Flip the compact/full detail view LIVE (the /full command) - no restart, no
+        env var. Returns the new state (True = full)."""
+        self.full = not self.full
+        return self.full
+
+    def show_last(self, arg: str = "") -> None:
+        """Re-show a recent tool result IN FULL (/last; /last 2 = the one before; the
+        last _KEEP_OBS results are kept). The live stream clips output to stay readable -
+        this is the on-demand recall so nothing is ever lost behind the clipping."""
+        try:
+            back = max(1, int(arg.strip() or "1"))
+        except (ValueError, AttributeError):
+            back = 1
+        if back > len(self._recent_obs):
+            self.notice("no tool result to show yet." if not self._recent_obs else
+                        f"only the last {len(self._recent_obs)} result(s) are kept.")
+            return
+        obs = self._recent_obs[-back]
+        self._w(format_observation(obs, color=self.color, full=True))
+
+    _KEEP_OBS = 5
+
+    def begin_turn(self) -> None:
+        """Start counting activity for one agent turn (tool calls, failures, time)."""
+        self._turn = {"t0": time.monotonic(), "tools": 0, "fails": 0}
+
+    def end_turn(self) -> None:
+        """Close the turn with a one-line dim summary - only when there was enough
+        activity for a recap to add signal (2+ tool calls), so short turns stay clean."""
+        t, self._turn = self._turn, None
+        if not t or t["tools"] < 2:
+            return
+        el = time.monotonic() - t["t0"]
+        fails = f" \u00b7 {t['fails']} failed" if t["fails"] else ""
+        self.notice(f"turn: {t['tools']} tool calls{fails} \u00b7 {el:0.0f}s")
 
     def ask(self, label: str = "you", hint: "str | None" = None,
             history_file=None) -> str:
@@ -694,6 +757,8 @@ class StatusView:
         self._tbl = None
 
     def tool_call(self, call) -> None:
+        if self._turn is not None and getattr(call, "name", "") != "finish":
+            self._turn["tools"] += 1
         self._w(format_tool_call(call, color=self.color, full=self.full))
 
     def observation(self, obs) -> None:
@@ -701,6 +766,13 @@ class StatusView:
         # finish is already shown as the tool-call line; don't echo it again.
         if (getattr(obs, "name", "") or "") == "finish":
             return
+        self._recent_obs = (self._recent_obs + [obs])[-self._KEEP_OBS:]
+        if self._turn is not None:
+            first = (getattr(obs, "output", "") or "").splitlines()
+            first = first[0] if first else ""
+            if (first.startswith("exit=") and first.strip() != "exit=0") or \
+                    first.startswith(("Denied", "Shell rejected")):
+                self._turn["fails"] += 1
         self._w(format_observation(obs, color=self.color, full=self.full))
 
     def error(self, stage: str, exc) -> None:

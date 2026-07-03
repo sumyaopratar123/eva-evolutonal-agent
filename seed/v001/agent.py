@@ -651,6 +651,30 @@ def _cmd_model(state, arg, view):
                 f"to switch provider, edit .env and restart.")
 
 
+def _cmd_status(state, view, mode):
+    """/status - a one-glance snapshot of the live session: identity, session, memory
+    (backlog) and a pending pivot. Read-only presentation of state the user otherwise
+    has to reconstruct from scattered lines."""
+    pivot = "none"
+    if PIVOT_REQUEST.exists():
+        try:
+            pivot = "PENDING: " + json.loads(
+                PIVOT_REQUEST.read_text(encoding="utf-8")).get("signature", "?")
+        except Exception:
+            pivot = "PENDING"
+    view.status([
+        ("mode", mode),
+        ("release", RELEASE.name),
+        ("provider", state.identity.get("adapter", "?")),
+        ("model", state.identity.get("model", "?")),
+        ("session", f"{state.session_id} ({len(state.session.events())} events)"),
+        ("sandbox", "free (shell pre-approved)" if ALLOW_SHELL else "safe (shell gated)"),
+        ("detail", "full (/full toggles)" if view.full else "compact (/full toggles)"),
+        ("pivot", pivot),
+        ("backlog", backlog_summary()),
+    ])
+
+
 def _cmd_resume(state, arg, view, mode, interactive):
     """/resume [id] - (work mode) list resumable sessions, or switch to one, replaying it."""
     if mode != "work":
@@ -744,6 +768,11 @@ def run_mode(mode: str, task: str):
     commands = {
         "/model": lambda a: _cmd_model(state, a, view),
         "/resume": lambda a: _cmd_resume(state, a, view, mode, interactive),
+        "/status": lambda a: _cmd_status(state, view, mode),
+        "/last": lambda a: view.show_last(a),
+        "/full": lambda a: view.notice(
+            "detail view: " + ("FULL - commands and tool output uncut."
+                               if view.toggle_full() else "compact (default).")),
     }
 
     view.welcome(usage=interactive)
@@ -812,12 +841,19 @@ def run_mode(mode: str, task: str):
 
     on_say_delta = view.on_say_delta if STREAM else None
 
+    def _show_friction(sig):
+        # Make the memory VISIBLE the moment it forms: a dim one-liner with the
+        # recurrence count against the pivot threshold, so the eventual pivot prompt
+        # never comes out of nowhere.
+        view.notice(f"noted: {sig}  ({backlog_count(sig)}/{PIVOT_THRESHOLD} \u2192 pivot)")
+
     def on_tool_call(call):
         view.tool_call(call)
         if call.name == "note_evolution_need":
             a = call.arguments or {}
             sig = record_capability_gap(a.get("need", ""), a.get("signature", ""),
                                         a.get("detail", ""), mode)
+            _show_friction(sig)
             if maybe_pivot(sig, mode, human, kind="capability_gap"):
                 pivoted["flag"] = True
 
@@ -825,8 +861,10 @@ def run_mode(mode: str, task: str):
         view.observation(obs)
         if obs.name == "shell":
             sig = record_shell_friction(obs.output, mode)
-            if sig and maybe_pivot(sig, mode, human):
-                pivoted["flag"] = True
+            if sig:
+                _show_friction(sig)
+                if maybe_pivot(sig, mode, human):
+                    pivoted["flag"] = True
 
     def on_error(stage: str, exc: Exception):
         view.error(stage, exc)
@@ -854,6 +892,7 @@ def run_mode(mode: str, task: str):
             state.session.append(Event(role="user", content=reply_text, images=reply_images))
 
         # Build the (compacted) turn view from the canonical log on each loop.
+        view.begin_turn()
         outcome = run_agent_loop(
             adapter=state.adapter,
             runtime=runtime,
@@ -868,6 +907,7 @@ def run_mode(mode: str, task: str):
             on_error=on_error,
             should_stop=lambda: pivoted["flag"],
         )
+        view.end_turn()
 
         if pivoted["flag"] or outcome == "error":
             break
