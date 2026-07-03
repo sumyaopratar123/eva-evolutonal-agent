@@ -17,6 +17,13 @@ if [[ "${1:-}" == "--free" ]]; then
   printf '     Omit --free for the default hardened SAFE sandbox.\n\n' >&2
 fi
 
+# Key-guard (opt-in via EVA_KEYGUARD=1 in .env): layer the sidecar proxy so the
+# API key lives ONLY in the llm-proxy container - EVA's container stays keyless.
+if [ -f .env ] && grep -Eq '^[[:space:]]*EVA_KEYGUARD[[:space:]]*=[[:space:]]*1[[:space:]]*$' .env; then
+  COMPOSE_FILES+=(-f docker-compose.keyguard.yml)
+  echo "  (key-guard on: API key stays in the llm-proxy sidecar; EVA's container is keyless)" >&2
+fi
+
 # Bare `./run.sh` just starts EVA (work is the default mode), matching run.ps1.
 cmd="${1:-work}"
 shift || true
@@ -245,7 +252,7 @@ eva_onboarding() {
   # Optional extras - everyday preferences only; one gate question, Enter skips all.
   local s t cur_s cur_t
   if [ "$fresh" = "1" ] || [ "$force" = "force" ]; then
-    printf "Configure optional extras - streaming, timeout? [y/N] "
+    printf "Configure optional extras - streaming, timeout, key-guard? [y/N] "
     read -r ans </dev/tty || ans=""
     if [[ "$ans" =~ ^[yY]([eE][sS])?$ ]]; then
       cur_s="on"; case "$(read_env_val EVA_STREAM)" in 0|false|no|off) cur_s="off" ;; esac
@@ -259,6 +266,14 @@ eva_onboarding() {
       printf "Model timeout in seconds (Enter keeps %s): " "$cur_t"
       read -r t </dev/tty || t=""
       [[ "$t" =~ ^[0-9]+$ ]] && { set_env_var LLM_TIMEOUT "$t"; did=1; }
+      local g cur_g
+      cur_g="off"; [ "$(read_env_val EVA_KEYGUARD)" = "1" ] && cur_g="on"
+      printf "Key-guard: keep the API key in a sidecar so EVA's container is keyless? [y/n] (Enter keeps %s) " "$cur_g"
+      read -r g </dev/tty || g=""
+      case "$g" in
+        y|Y|yes|YES) set_env_var EVA_KEYGUARD 1; did=1 ;;
+        n|N|no|NO)   set_env_var EVA_KEYGUARD 0; did=1 ;;
+      esac
     fi
   fi
 

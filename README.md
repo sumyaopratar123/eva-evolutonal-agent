@@ -304,6 +304,16 @@ container and `./data`, and ephemeral (system installs last only for the session
 told which mode it is in (`EVA_SANDBOX`), so in safe mode it recognises a system-library need
 as an *image need* and stops instead of thrashing `apt`. Prefer safe unless you need it.
 
+**Key-guard sidecar** *(opt-in, `EVA_KEYGUARD=1` in `.env`)*. By default the LLM API key
+sits in EVA's environment — readable by an agent that has a shell. With key-guard on,
+[`docker-compose.keyguard.yml`](docker-compose.keyguard.yml) runs a tiny stdlib-only proxy
+([`proxy/llm_proxy.py`](proxy/llm_proxy.py)) as a sidecar: the key exists **only** there,
+EVA's container gets every key variable blanked and talks to `http://llm-proxy:8484`
+instead; the sidecar pins its upstream at startup (it is **not** an open relay) and injects
+the credential. EVA loses nothing — full egress, `fetch_url`, pip and self-evolution all
+stay; only the secret moves out of its address space. Honest limit: this prevents key
+*theft*, not key *use* — put spend limits on the provider account.
+
 > **Residual risk:** the container has outbound network access (for the LLM API).
 > For maximum isolation, point EVA at a local model and restrict egress.
 

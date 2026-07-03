@@ -1,0 +1,75 @@
+# EVA key-guard overlay (opt-in): keep LLM API keys OUT of EVA's container.
+#
+# Enable with EVA_KEYGUARD=1 in .env (the run.ps1 / run.sh wrappers pick it up),
+# or manually:  docker compose -f docker-compose.yml -f docker-compose.keyguard.yml run --rm eva work
+#
+# How it works: a tiny sidecar container (same eva image, stdlib-only script,
+# proxy/llm_proxy.py) is the ONLY place the real API key exists. EVA's container
+# gets every key variable blanked and talks to http://llm-proxy:8484 instead;
+# the sidecar pins the upstream endpoint from its own env and injects the
+# credential there. EVA - which can run shell commands and rewrite its own code -
+# can therefore never read or exfiltrate the key. It changes NOTHING about what
+# EVA can do (full egress, fetch_url, pip, self-evolution all stay); only the
+# secret moves out of its address space.
+#
+# The endpoint path /v1/messages satisfies both adapters (anthropic requires a
+# .../messages suffix; openai_chat uses the URL verbatim) - the sidecar ignores
+# the path and always forwards to its pinned upstream.
+
+services:
+  llm-proxy:
+    image: eva:latest
+    init: true
+    entrypoint: ["/usr/local/bin/python", "/proxy/llm_proxy.py"]
+
+    # Same containment posture as the sandbox itself.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+          pids: 64
+
+    volumes:
+      - ./proxy:/proxy:ro   # host infrastructure; NOT mounted into EVA's container
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # The sidecar resolves provider/endpoint the same way EVA's adapter factory
+      # does - and it is the ONLY container that receives the key.
+      EVA_PROVIDER: "${EVA_PROVIDER:-openai_chat}"
+      EVA_ENDPOINT: "${EVA_ENDPOINT:-}"
+      EVA_API_KEY: "${EVA_API_KEY:-}"
+      LLM_ENDPOINT: "${LLM_ENDPOINT:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-}"
+
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8484/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 2s
+
+  eva:
+    depends_on:
+      llm-proxy:
+        condition: service_healthy
+    environment:
+      # Point EVA at the sidecar and blank every key variable: the container that
+      # runs untrusted/self-modifying code holds NO secret to steal.
+      EVA_ENDPOINT: "http://llm-proxy:8484/v1/messages"
+      EVA_API_KEY: "keyguard"
+      LLM_ENDPOINT: ""
+      LLM_API_KEY: ""
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""

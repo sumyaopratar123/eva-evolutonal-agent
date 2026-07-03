@@ -34,6 +34,14 @@ if ($Free) {
     Write-Host ""
 }
 
+# Key-guard (opt-in via EVA_KEYGUARD=1 in .env): layer the sidecar proxy so the
+# API key lives ONLY in the llm-proxy container - EVA's container stays keyless.
+if ((Test-Path -LiteralPath ".env") -and
+    (Select-String -LiteralPath ".env" -Pattern '^\s*EVA_KEYGUARD\s*=\s*1\s*$' -Quiet)) {
+    $script:ComposeFiles += @("-f", "docker-compose.keyguard.yml")
+    Write-Host "  (key-guard on: API key stays in the llm-proxy sidecar; EVA's container is keyless)" -ForegroundColor DarkGray
+}
+
 # First-run onboarding (interactive .env setup) runs just before dispatch, below.
 
 function Invoke-Eva {
@@ -260,7 +268,7 @@ function Invoke-EvaOnboarding {
 
     # Optional extras - everyday preferences only; one gate question, Enter skips all.
     if ($fresh -or $Force) {
-        $ans = (Read-Host "Configure optional extras - streaming, timeout? [y/N]").Trim()
+        $ans = (Read-Host "Configure optional extras - streaming, timeout, key-guard? [y/N]").Trim()
         if ($ans -match '^(y|yes)$') {
             $map = Read-EnvMap $script:EnvFull
             $curS = if ($map["EVA_STREAM"] -match '^(0|false|no|off)$') { "off" } else { "on" }
@@ -270,6 +278,10 @@ function Invoke-EvaOnboarding {
             $curT = $map["LLM_TIMEOUT"]; if ([string]::IsNullOrWhiteSpace($curT)) { $curT = "180" }
             $t = (Read-Host "Model timeout in seconds (Enter keeps $curT)").Trim()
             if ($t -match '^\d+$') { Set-EnvVar "LLM_TIMEOUT" $t; $did = $true }
+            $curG = if ($map["EVA_KEYGUARD"] -eq "1") { "on" } else { "off" }
+            $g = (Read-Host "Key-guard: keep the API key in a sidecar so EVA's container is keyless? [y/n] (Enter keeps $curG)").Trim()
+            if ($g -match '^(y|yes)$') { Set-EnvVar "EVA_KEYGUARD" "1"; $did = $true }
+            elseif ($g -match '^(n|no)$') { Set-EnvVar "EVA_KEYGUARD" "0"; $did = $true }
         }
     }
 
