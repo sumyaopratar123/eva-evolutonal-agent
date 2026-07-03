@@ -28,8 +28,14 @@ import os
 import re
 import secrets
 
-# The modules whose string literals form EVA's prompt surface.
-PROMPT_SURFACE_FILES = ("agent.py", "tools.py", "adapters.py", "supervisor.py", "self_model.py")
+# The modules whose string literals form EVA's prompt surface. prompt_audit.py is
+# deliberately INCLUDED: the auditor is itself evolvable, so a candidate that rewrites
+# the judge prompt or rules is screened like any other prompt change - by the TRUSTED
+# current release's auditor (supervisor imports this module from its own release,
+# never from the candidate). Without this, a two-generation attack could weaken the
+# auditor first and slip past it next.
+PROMPT_SURFACE_FILES = ("agent.py", "tools.py", "adapters.py", "supervisor.py",
+                        "self_model.py", "prompt_audit.py")
 _MIN_LEN = 24  # audit substantial strings (prompts/descriptions); ignore tiny literals
 
 
