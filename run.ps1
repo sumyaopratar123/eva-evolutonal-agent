@@ -165,7 +165,7 @@ function Invoke-EvaOnboarding {
         Write-Host "I don't see a .env config yet." -ForegroundColor Yellow
         $ans = Read-Host "Shall I set up EVA with you now? [Y/n]"
         if ($ans -match '^\s*(n|no)\s*$') {
-            Write-Warning "Skipping setup - EVA may not reach a model without credentials. Run `eva setup` any time."
+            Write-Warning "Skipping setup - EVA may not reach a model without credentials. Run 'eva setup' any time."
             return
         }
         Save-EnvLines @("# EVA configuration (created by run.ps1 setup)")
@@ -288,7 +288,7 @@ function Invoke-EvaOnboarding {
         Show-EnvTip; Write-Host ""
     }
     if ((-not $model) -or (-not $key)) {
-        Write-Warning "Config incomplete (model or API key missing) - EVA may not reach a model. Run `eva setup` to finish."
+        Write-Warning "Config incomplete (model or API key missing) - EVA may not reach a model. Run 'eva setup' to finish."
     }
 }
 
@@ -459,12 +459,12 @@ Write-Output 'OK'
         @"
 EVA - Evolvable Virtual Agent (Docker sandbox)
 
-Usage: .\run.ps1 <command> [args]   (or, after `install`, simply:  eva <command> [args])
+Usage: .\run.ps1 <command> [args]   (or, after 'install', simply:  eva <command> [args])
 
 Getting started:
-  install               One-time setup: `eva` on PATH + tab-completion (+ optional build)
+  install               One-time setup: 'eva' on PATH + tab-completion (+ optional build)
   setup                 (Re)configure .env: provider, model, key + extras (Enter keeps current)
-  eva                   Start chatting - bare `eva` opens a work session (default)
+  eva                   Start chatting - bare 'eva' opens a work session (default)
   help                  Show this overview (in chat, type /help instead)
 
 Sessions (modes are chosen at launch):
@@ -482,7 +482,7 @@ Organism & sandbox:
   build                 Build (or rebuild) the sandbox image
   shell                 Open a shell inside the container (debug)
   fix-perms             Reset ./data ownership to the sandbox user (after a -Free run)
-  uninstall             Undo `install` (remove from PATH + tab-completion)
+  uninstall             Undo 'install' (remove from PATH + tab-completion)
 
 Sandbox mode:
   -Free <command>       Run in the FREE sandbox (writable rootfs + root + apt) instead of
