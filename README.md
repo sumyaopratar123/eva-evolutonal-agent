@@ -33,15 +33,14 @@ EVA is not a finished agent architecture. It is a **meta-architecture for evolvi
   memory, self-model, TUI — all of `seed/v001` is only *generation 0*. EVA
   evolves copies of it under the gates.
 
-That makes EVA **bounded architecture-agnostic**: not "no architecture", but
-"architecture as a gated, reversible, evolvable state." Big platform agents and frameworks ship the
-structure — gateway, skill registry, channels, scheduler. EVA ships the
-**mechanism to grow an agent and its structure under control**, so two different uses can, over many
-generations, grow two different EVAs — without ever weakening the kernel, gates,
-or policies.
+That makes EVA **bounded architecture-agnostic**: architecture is not shipped, it is
+**a gated, reversible, evolvable state**. Frameworks ship structure — gateway, skill
+registry, channels, scheduler. EVA ships the **mechanism to grow that structure under
+control**: two different uses can, over generations, grow two different EVAs — without
+ever weakening the kernel, gates, or policies.
 
-EVA is initially released from the **seed** — the **smallest viable organism plus an immune system**
-(gates, ratchet, policies, manifest hashes), not a product. New organs and skills are
+The seed is deliberately not a product but the **smallest viable organism plus an
+immune system** (gates, ratchet, policies, manifest hashes). New organs and skills are
 *earned* through use and friction.
 
 | | Most agent frameworks | EVA |
@@ -74,13 +73,12 @@ evolution loop · every self-change afterwards
   vN+1 (the new live release) — recorded in the ledger; `rollback` steps back through it
 ```
 
-- **`organism.py`** is the kernel: ~600 lines, baked into the image, **not**
-  editable by the agent. It seeds `v001`, runs the final promotion gate, records a
-  release **ledger**, and can **roll back** through it.
-- **`seed/v001/`** is the genome — real, reviewable, hash-pinned files. The kernel
-  verifies their SHA-256 before materializing them into `runtime/`.
-- **`runtime/releases/vNNN/`** are the live, evolvable versions. EVA edits a
-  *candidate*, the gates test it, and only then does EVA **swap itself** for it.
+- **`organism.py`** — the kernel: ~600 lines, baked into the image, out of the
+  agent's reach. It seeds the genome, runs the final gate, keeps the ledger.
+- **`seed/v001/`** — the genome: real, reviewable, hash-pinned Python files.
+- **`runtime/releases/vN/`** — the live, evolvable generations. EVA never edits
+  itself in place; it builds a candidate and, only when the gates pass, **swaps
+  itself** for it.
 
 ## How it evolves
 
@@ -95,8 +93,8 @@ Example `improve` run: EVA adds a skill registry to itself
 
 ![EVA improving itself — inspect → candidate → write + test → gated promotion](docs/Eva-improve.gif)
 
-EVA can self-change itself in **two modes**, and both land the same way — a
-**candidate → tests → gated promotion**. They differ only in *who picks the change*:
+Self-change comes in **two modes**; both land the same way — **candidate → tests →
+gated promotion** — and differ only in *who picks the change*:
 
 - **`improve` — directed.** You hand EVA one concrete task (the run above:
   *"design and implement a skill registry"*). It implements exactly that as a
@@ -112,11 +110,10 @@ friction*, not designed up front. When the same signature recurs, EVA
 offers to **pivot** to an `improve` cycle aimed at the root cause — a clean phase
 change, never live mutation.
 
-Beyond failures, EVA also learns from **user needs**: when a request reveals a
-capability it lacks (or can only do awkwardly), it records it with a stable
-signature (`note_evolution_need`). A one-off is just handled; only a need that
-**recurs** — tracked across sessions — is proposed as a real skill to build and
-promote. New abilities are *earned from what you actually keep asking for*.
+Beyond failures, EVA learns from **user needs**: when a request reveals a capability
+it lacks, it notes it under a stable signature (`note_evolution_need`). A one-off is
+simply handled; only a need that **recurs across sessions** is proposed as a real
+skill — new abilities are *earned from what you actually keep asking for*.
 
 A self-change goes live only after it survives the whole gate stack: the release's
 full LLM-free suite — unit checks, smoke, dry-runs of every mode, qualification
@@ -271,16 +268,11 @@ data/                created at runtime; all evolution lives here (git-ignored)
 Self-modification is only safe if EVA can't quietly weaken its own guardrails. The
 defenses are **layered**, and each lives where the layer it protects can't edit it:
 
-- **Gated self-change.** No edit goes live in place. Every change becomes a
-  *candidate* that must clear the LLM-free gates — the **ratchet** (never fewer
-  checks than today), the independent **kernel gate** (core identity + a manifest
-  re-hash so a release can't lie about its content), and a recorded **ledger** for
-  multi-step `rollback`.
-- **The prompt surface is gated too** *(opt-in)*. System prompts and tool
-  descriptions are as security-critical as code, so a candidate's **prompt-surface
-  diff** is screened before promotion: deterministic rules catch gate-weakening,
-  approval-bypass and deception, and an optional **LLM judge** — nonce-guarded and
-  **fail-closed** — reviews the rest (`EVA_PROMPT_AUDIT` / `…_AUDIT_LLM`).
+- **Gated self-change — code *and* prompts.** No edit ever goes live in place:
+  every change is a candidate that must survive the gate stack above — the
+  ratchet, the kernel constitution, the opt-in prompt-surface audit
+  (`EVA_PROMPT_AUDIT`, deterministic rules + a nonce-guarded, **fail-closed** LLM
+  judge), and the ledger with rollback.
 - **Untrusted content stays untrusted** *(opt-in)*. Tool and web output is framed
   as data, not instructions (**spotlighting**), so a prompt injection hidden in a
   fetched page can't quietly redirect EVA (`EVA_PROMPT_SPOTLIGHT`).
@@ -293,8 +285,8 @@ reversible**. Containment (below) limits whatever still slips through.
 
 ## Contained, not "safe"
 
-Containment limits the *blast radius*; it does not make EVA trustworthy. EVA runs
-inside a hardened container ([`docker-compose.yml`](docker-compose.yml)):
+EVA runs inside a hardened container ([`docker-compose.yml`](docker-compose.yml))
+that bounds the blast radius:
 
 - non-root user, `cap_drop: ALL`, `no-new-privileges`, CPU/memory/PID limits
 - **read-only root filesystem**; only `./data/{runtime,state,workspace,local}` are writable
@@ -334,10 +326,6 @@ as an *image need* and stops instead of thrashing `apt`. Prefer safe unless you 
 | `supervisor.py` | Release gates: required files, the **ratchet**, smoke, dry-runs, qualification rounds. |
 | `tests.py` | LLM-free checks — the ratchet itself (every promotion runs them). |
 | `evals.py` | **Golden traces**: recorded provider responses replayed through the *real* adapters + loop + runtime (offline, in the gate) — plus an opt-in live smoke. |
-
-Because the self-model is *generated from the live code*, EVA always knows the
-release it is actually running and its current toolset — `inspect_self`
-(`overview` · `anatomy` · `skills` · `capabilities` · `policy`).
 
 ## Honest limitations
 
