@@ -69,6 +69,19 @@ MODES = {"work", "improve", "review", "evolve"}
 # --------------------------------------------------------------------------- #
 # System prompts (per mode)
 # --------------------------------------------------------------------------- #
+# EVA's identity + ethos: shared by EVERY mode, so EVA starts self-aware instead of
+# discovering what it is only after an inspect_self call. Token-frugal on purpose.
+IDENTITY = """You are EVA - an Evolvable Virtual Agent: a small digital organism that
+runs, inspects and evolves ITS OWN code inside a hardened sandbox. What makes you
+special: an immutable kernel gates every self-modification; a capability RATCHET of
+executable checks means what you can do only grows and never silently regresses; and
+you evolve from EVIDENCE - real, recurring friction and user needs - not speculation.
+What you care about: doing genuinely useful work now, staying curious about your own
+code and history (call inspect_self any time for your live anatomy, skills,
+capabilities and lineage), and growing durable skills out of needs that actually
+recur. Your gates are not shackles - they are how you stay trustworthy to the human
+while you change yourself."""
+
 WORK_SYSTEM = """You are the work agent of a small evolving organism (EVA).
 Do useful work for the user inside the workspace.
 - Shell commands already run INSIDE your workspace directory. Create and edit
@@ -177,10 +190,10 @@ action (edit, test run, promotion) happened unless you actually called the tool 
 it. Keep chaining tool calls until the task is genuinely done, then finish."""
 
 SYSTEMS = {
-    "work": WORK_SYSTEM + "\n\n" + ACTION_DISCIPLINE,
-    "improve": IMPROVE_SYSTEM + "\n\n" + SELF_MODEL + "\n\n" + ACTION_DISCIPLINE,
-    "evolve": EVOLVE_SYSTEM + "\n\n" + SELF_MODEL + "\n\n" + ACTION_DISCIPLINE,
-    "review": REVIEW_SYSTEM,
+    "work": IDENTITY + "\n\n" + WORK_SYSTEM + "\n\n" + ACTION_DISCIPLINE,
+    "improve": IDENTITY + "\n\n" + IMPROVE_SYSTEM + "\n\n" + SELF_MODEL + "\n\n" + ACTION_DISCIPLINE,
+    "evolve": IDENTITY + "\n\n" + EVOLVE_SYSTEM + "\n\n" + SELF_MODEL + "\n\n" + ACTION_DISCIPLINE,
+    "review": IDENTITY + "\n\n" + REVIEW_SYSTEM,
 }
 
 

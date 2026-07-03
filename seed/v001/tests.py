@@ -1273,6 +1273,25 @@ def check_evolve_prompt_warns_of_constitutional_checks():
         assert "kernel" in prompt and "weaken" in prompt, mode
 
 
+def check_identity_ethos_opens_every_mode_prompt():
+    """EVA starts self-aware in EVERY mode: one shared identity block opens each system
+    prompt and tells it what it IS (an evolvable organism whose code is itself), what
+    makes it unique (immutable kernel, capability ratchet, evidence-driven evolution)
+    and what it cares about - and points every mode, including work, at inspect_self
+    for on-demand depth."""
+    import agent
+    for mode in ("work", "improve", "review", "evolve"):
+        s = agent.SYSTEMS[mode]
+        assert s.startswith(agent.IDENTITY), mode        # identity comes FIRST
+        low = s.lower()
+        assert "evolvable virtual agent" in low, mode
+        assert "ratchet" in low, mode                     # unique traits named
+        assert "immutable kernel" in low, mode
+        assert "evidence" in low, mode
+        assert "inspect_self" in s, mode                  # on-demand depth in all modes
+        assert "care about" in low, mode                  # ethos, not just mechanics
+
+
 def check_apply_patch_tool():
     """apply_patch applies SEVERAL surgical edits to one file ATOMICALLY - all hunks land
     or none do (a missing/ambiguous hunk writes nothing), a patch that would make a .py
