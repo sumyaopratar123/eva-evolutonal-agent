@@ -8,7 +8,7 @@
 <meta property="og:title" content="EVA — Evolvable Virtual Agent">
 <meta property="og:description" content="A meta-architecture for evolving agent architectures: seed → candidate → gates → promote → ledger → rollback.">
 <meta property="og:image" content="https://arturkorb3.github.io/eva-evolutional-agent/Eva-thumbnail.png">
-<link rel="icon" type="image/png" href="Eva-Logo.png">
+<link rel="icon" type="image/png" href="Eva-avatar.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -49,7 +49,7 @@ section{max-width:1000px;margin:0 auto;padding:4.5rem 1.5rem 1rem}
 nav{position:fixed;top:0;left:0;right:0;z-index:50;background:rgba(5,5,8,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 nav .inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:1.2rem;padding:.65rem 1.5rem;overflow-x:auto}
 nav .logo{display:flex;align-items:center;gap:.55rem;font-weight:800;color:#fff;font-size:1.05rem;white-space:nowrap}
-nav .logo img{height:26px}
+nav .logo img{height:30px;width:30px;border-radius:50%;object-fit:cover;border:1px solid var(--cyan);box-shadow:0 0 10px rgba(0,229,255,.35)}
 nav a.item{color:var(--dim);font-size:.88rem;white-space:nowrap;transition:color .15s}
 nav a.item:hover{color:var(--cyan);text-shadow:none}
 nav .gh{margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:.3rem .8rem;color:#fff;font-size:.85rem;white-space:nowrap}
@@ -117,7 +117,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
 
 <nav>
   <div class="inner">
-    <a class="logo" href="#top"><img src="Eva-Logo.png" alt=""> EVA</a>
+    <a class="logo" href="#top"><img src="Eva-avatar.png" alt=""> EVA</a>
     <a class="item" href="#idea">Idea</a>
     <a class="item" href="#evolution">Evolution</a>
     <a class="item" href="#gates">Gates</a>
@@ -132,6 +132,8 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
 
 <header id="top">
   <div class="wrap">
+    <img src="Eva-avatar.png" alt="EVA — a girl studying an apple that mirrors her own reflection"
+         style="width:120px;height:120px;border-radius:50%;object-fit:cover;border:2px solid var(--cyan);box-shadow:0 0 26px rgba(0,229,255,.35),0 0 60px rgba(182,75,255,.20);margin-bottom:1.1rem">
     <div class="kicker k-cyan">controlled self-evolving llm agent</div>
     <h1>EVA — <span class="grad">Evolvable</span> Virtual Agent</h1>
     <p class="sub">An immutable kernel boots a seed release. From there, EVA rewrites, tests and
@@ -279,6 +281,11 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
   automatically, and a behaviour shipped without a pinned check is invisible to EVA's future
   self <em>and</em> unprotected by the ratchet — so self-knowledge and reality cannot drift
   apart.</div>
+  <p style="text-align:center;margin-top:1.6rem">
+    <img src="Eva-Logo.png" alt="EVA studying an apple that mirrors her own reflection"
+         style="max-width:560px;width:100%;border-radius:12px;border:1px solid var(--line)">
+    <br><small style="color:var(--dim)">Eva, contemplating her own reflection.</small>
+  </p>
 </section>
 
 <hr class="divider">
