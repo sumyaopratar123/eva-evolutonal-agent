@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EVA — Evolvable Virtual Agent</title>
+<meta name="description" content="EVA is a self-evolving LLM agent: an immutable kernel boots a seed release, then EVA rewrites, tests and promotes new versions of itself — every self-change gated and reversible.">
+<meta property="og:title" content="EVA — Evolvable Virtual Agent">
+<meta property="og:description" content="A meta-architecture for evolving agent architectures: seed → candidate → gates → promote → ledger → rollback.">
+<meta property="og:image" content="https://arturkorb3.github.io/eva-evolutional-agent/Eva-thumbnail.png">
+<link rel="icon" type="image/png" href="Eva-Logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#050508; --bg2:#0b0b12; --panel:#0e0e18; --line:#1c1c2c;
+  --text:#d7d9e4; --dim:#8a8da0;
+  --cyan:#00e5ff; --purple:#b64bff; --green:#39ff8b; --red:#ff3b5c; --amber:#ffb84d;
+  --glow-cyan:0 0 18px rgba(0,229,255,.35); --glow-purple:0 0 18px rgba(182,75,255,.35);
+  --glow-green:0 0 18px rgba(57,255,139,.30); --glow-red:0 0 18px rgba(255,59,92,.30);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:74px}
+body{background:var(--bg);color:var(--text);font-family:'Outfit',system-ui,sans-serif;font-weight:300;line-height:1.65;font-size:17px}
+::selection{background:rgba(0,229,255,.25)}
+a{color:var(--cyan);text-decoration:none}
+a:hover{text-shadow:var(--glow-cyan)}
+code,pre{font-family:'JetBrains Mono',monospace;font-size:.86em}
+code{background:#141422;border:1px solid var(--line);border-radius:5px;padding:.1em .4em;color:#9be8ff}
+pre{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:1.1rem 1.3rem;overflow-x:auto;line-height:1.55}
+pre code{background:none;border:none;padding:0;color:#c9e6ef}
+b,strong{font-weight:600;color:#fff}
+h2{font-weight:800;font-size:2rem;letter-spacing:.01em;margin-bottom:1rem;color:#fff}
+h2 .hash{color:var(--cyan);margin-right:.4rem;text-shadow:var(--glow-cyan)}
+h3{font-weight:600;font-size:1.2rem;margin:1.6rem 0 .6rem;color:#fff}
+p{margin:.7rem 0}
+ul{margin:.7rem 0 .7rem 1.4rem}
+li{margin:.35rem 0}
+section{max-width:1000px;margin:0 auto;padding:4.5rem 1.5rem 1rem}
+.kicker{font-family:'JetBrains Mono',monospace;font-size:.78rem;letter-spacing:.28em;text-transform:uppercase;margin-bottom:.6rem}
+.k-cyan{color:var(--cyan);text-shadow:var(--glow-cyan)}
+.k-purple{color:var(--purple);text-shadow:var(--glow-purple)}
+.k-green{color:var(--green);text-shadow:var(--glow-green)}
+.k-red{color:var(--red);text-shadow:var(--glow-red)}
+.k-amber{color:var(--amber)}
+
+/* nav */
+nav{position:fixed;top:0;left:0;right:0;z-index:50;background:rgba(5,5,8,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:1.2rem;padding:.65rem 1.5rem;overflow-x:auto}
+nav .logo{display:flex;align-items:center;gap:.55rem;font-weight:800;color:#fff;font-size:1.05rem;white-space:nowrap}
+nav .logo img{height:26px}
+nav a.item{color:var(--dim);font-size:.88rem;white-space:nowrap;transition:color .15s}
+nav a.item:hover{color:var(--cyan);text-shadow:none}
+nav .gh{margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:.3rem .8rem;color:#fff;font-size:.85rem;white-space:nowrap}
+nav .gh:hover{border-color:var(--cyan);box-shadow:var(--glow-cyan);text-shadow:none}
+
+/* hero */
+header{padding:6.5rem 1.5rem 3rem;text-align:center;position:relative;overflow:hidden}
+header::before{content:"";position:absolute;inset:-40% -20% auto;height:120%;background:
+ radial-gradient(ellipse 50% 40% at 30% 20%,rgba(0,229,255,.10),transparent 60%),
+ radial-gradient(ellipse 50% 40% at 70% 30%,rgba(182,75,255,.10),transparent 60%);pointer-events:none}
+header .wrap{position:relative;max-width:1000px;margin:0 auto}
+header h1{font-size:clamp(2.4rem,6vw,4rem);font-weight:800;color:#fff;letter-spacing:.02em}
+header h1 .grad{background:linear-gradient(90deg,var(--cyan),var(--purple));-webkit-background-clip:text;background-clip:text;color:transparent}
+header .sub{color:var(--dim);font-size:1.2rem;max-width:640px;margin:.8rem auto 0}
+header .cta{display:flex;gap:.9rem;justify-content:center;margin:1.8rem 0 2.4rem;flex-wrap:wrap}
+.btn{display:inline-block;border-radius:10px;padding:.65rem 1.5rem;font-weight:600;font-size:.95rem;transition:box-shadow .2s}
+.btn-cyan{background:linear-gradient(90deg,rgba(0,229,255,.16),rgba(182,75,255,.16));border:1px solid var(--cyan);color:#fff}
+.btn-cyan:hover{box-shadow:var(--glow-cyan);text-shadow:none}
+.btn-ghost{border:1px solid var(--line);color:var(--text)}
+.btn-ghost:hover{border-color:var(--purple);box-shadow:var(--glow-purple);text-shadow:none}
+header img.thumb{width:100%;max-width:980px;border-radius:14px;border:1px solid var(--line);box-shadow:0 0 60px rgba(0,229,255,.10),0 0 120px rgba(182,75,255,.08)}
+.warn{max-width:820px;margin:1.6rem auto 0;border:1px solid rgba(255,184,77,.4);background:rgba(255,184,77,.06);border-radius:10px;padding:.8rem 1.1rem;color:#ffd9a0;font-size:.92rem;text-align:left}
+
+/* cards */
+.grid{display:grid;gap:1rem;margin:1.4rem 0}
+.grid.c2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.grid.c3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.2rem 1.3rem;transition:border-color .2s,box-shadow .2s}
+.card:hover{border-color:rgba(0,229,255,.45);box-shadow:var(--glow-cyan)}
+.card.p:hover{border-color:rgba(182,75,255,.5);box-shadow:var(--glow-purple)}
+.card.g:hover{border-color:rgba(57,255,139,.5);box-shadow:var(--glow-green)}
+.card.r:hover{border-color:rgba(255,59,92,.5);box-shadow:var(--glow-red)}
+.card h4{font-weight:600;color:#fff;font-size:1.02rem;margin-bottom:.4rem}
+.card p{color:var(--dim);font-size:.93rem;margin:0}
+.card .ic{font-size:1.3rem;margin-bottom:.4rem;display:block}
+
+/* tables */
+table{width:100%;border-collapse:collapse;margin:1.2rem 0;font-size:.93rem}
+th{font-family:'JetBrains Mono',monospace;font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--cyan);text-align:left;padding:.6rem .8rem;border-bottom:1px solid rgba(0,229,255,.35)}
+td{padding:.6rem .8rem;border-bottom:1px solid var(--line);vertical-align:top;color:var(--text)}
+td:first-child{white-space:nowrap}
+tr:hover td{background:rgba(0,229,255,.03)}
+
+/* diagram */
+.flow{display:flex;align-items:stretch;gap:.6rem;flex-wrap:wrap;justify-content:center;margin:1.6rem 0}
+.node{border-radius:10px;padding:.7rem 1rem;text-align:center;min-width:120px;font-size:.88rem}
+.node b{display:block;font-family:'JetBrains Mono',monospace;font-size:.92rem}
+.node small{color:var(--dim);font-size:.76rem}
+.n-cyan{border:1px solid var(--cyan);box-shadow:inset 0 0 20px rgba(0,229,255,.07)}
+.n-purple{border:1px solid var(--purple);box-shadow:inset 0 0 20px rgba(182,75,255,.07)}
+.n-green{border:1px solid var(--green);box-shadow:inset 0 0 20px rgba(57,255,139,.07)}
+.n-red{border:1px solid var(--red);box-shadow:inset 0 0 20px rgba(255,59,92,.07)}
+.arrow{align-self:center;color:var(--dim);font-size:1.2rem}
+
+.gif{width:100%;border-radius:12px;border:1px solid var(--line);margin:1.2rem 0}
+.divider{max-width:1000px;margin:3.5rem auto 0;border:none;border-top:1px solid var(--line)}
+footer{text-align:center;padding:3.5rem 1.5rem 2.5rem;color:var(--dim);font-size:.9rem}
+footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
+.note{border-left:3px solid var(--purple);background:rgba(182,75,255,.05);border-radius:0 10px 10px 0;padding:.8rem 1.1rem;margin:1.2rem 0;font-size:.94rem;color:var(--text)}
+.note.red{border-left-color:var(--red);background:rgba(255,59,92,.05)}
+@media(max-width:640px){section{padding:3rem 1.1rem 1rem}h2{font-size:1.55rem}}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="inner">
+    <a class="logo" href="#top"><img src="Eva-Logo.png" alt=""> EVA</a>
+    <a class="item" href="#idea">Idea</a>
+    <a class="item" href="#evolution">Evolution</a>
+    <a class="item" href="#gates">Gates</a>
+    <a class="item" href="#self">Self-knowledge</a>
+    <a class="item" href="#using">Using EVA</a>
+    <a class="item" href="#security">Security</a>
+    <a class="item" href="#components">Components</a>
+    <a class="item" href="#limits">Limitations</a>
+    <a class="gh" href="https://github.com/arturkorb3/eva-evolutional-agent">GitHub&nbsp;↗</a>
+  </div>
+</nav>
+
+<header id="top">
+  <div class="wrap">
+    <div class="kicker k-cyan">controlled self-evolving llm agent</div>
+    <h1>EVA — <span class="grad">Evolvable</span> Virtual Agent</h1>
+    <p class="sub">An immutable kernel boots a seed release. From there, EVA rewrites, tests and
+    promotes new versions of <em>itself</em> — every self-change gated and reversible.</p>
+    <div class="cta">
+      <a class="btn btn-cyan" href="https://github.com/arturkorb3/eva-evolutional-agent#quickstart">Quickstart&nbsp;→</a>
+      <a class="btn btn-ghost" href="#idea">How it works</a>
+    </div>
+    <img class="thumb" src="Eva-thumbnail.png" alt="EVA overview: bootstrap once (seed → release v001), then an evolution loop of self-inspection, candidates, gates and promotion — with rollback via ledger">
+    <div class="warn">⚠ <b>Experimental and self-modifying.</b> EVA runs shell commands and rewrites its own
+    source code. Only ever run it inside the provided Docker sandbox — never directly on a host
+    or against data you care about.</div>
+  </div>
+</header>
+
+<section id="idea">
+  <div class="kicker k-cyan">01 · the idea</div>
+  <h2><span class="hash">#</span>Not a framework — a meta-architecture</h2>
+  <p>EVA is not a finished agent architecture. It is a <b>meta-architecture for evolving
+  agent-architectures</b>:</p>
+  <div class="grid c2">
+    <div class="card"><span class="ic">🔒</span><h4>Fixed meta-architecture — the kernel</h4>
+      <p>seed → candidate → gate → promote → ledger → rollback. Baked into the image, out of
+      the agent's reach. The agent can never touch it.</p></div>
+    <div class="card p"><span class="ic">🧬</span><h4>Evolvable agent-architecture — the release</h4>
+      <p>The loop, tools, adapters, memory, self-model, TUI — all of <code>seed/v001</code> is only
+      <em>generation&nbsp;0</em>. EVA evolves copies of it under the gates.</p></div>
+  </div>
+  <p>That makes EVA <b>bounded architecture-agnostic</b>: architecture is not shipped, it is a
+  gated, reversible, evolvable <em>state</em>. Frameworks ship structure — gateway, skill registry,
+  channels, scheduler. EVA ships the <b>mechanism to grow that structure under control</b>: two
+  different uses can, over generations, grow two different EVAs — without ever weakening the
+  kernel, gates, or policies.</p>
+  <p>The seed is deliberately not a product but the <b>smallest viable organism plus an immune
+  system</b> (gates, ratchet, policies, manifest hashes). New organs and skills are
+  <em>earned</em> through use and friction.</p>
+
+  <table>
+    <tr><th></th><th>Most agent frameworks</th><th>EVA</th></tr>
+    <tr><td><b>Architecture</b></td><td>fixed, shipped up front</td><td>evolves through generations</td></tr>
+    <tr><td><b>Self-improvement</b></td><td>prompt/config tweaks</td><td>rewrites its own <b>code</b> as a gated release</td></tr>
+    <tr><td><b>Safety of self-change</b></td><td>manual / none</td><td>test <b>ratchet</b> · immutable <b>kernel gate</b> · gated <b>prompt surface</b> · rollback ledger</td></tr>
+    <tr><td><b>New capability</b></td><td>you code a plugin</td><td><b>earned from real usage</b> and self-inspection, then promoted</td></tr>
+  </table>
+
+  <h3>Bootstrap once, then evolve forever</h3>
+  <div class="flow">
+    <div class="node n-green"><b>seed/v001</b><small>hash-pinned genome</small></div>
+    <div class="arrow">→</div>
+    <div class="node n-cyan"><b>vN live</b><small>never edited in place</small></div>
+    <div class="arrow">→</div>
+    <div class="node n-purple"><b>candidate</b><small>EVA edits a COPY</small></div>
+    <div class="arrow">→</div>
+    <div class="node n-purple"><b>gates</b><small>tests · ratchet · kernel</small></div>
+    <div class="arrow">→</div>
+    <div class="node n-green"><b>vN+1</b><small>promoted, in the ledger</small></div>
+    <div class="arrow">⇢</div>
+    <div class="node n-red"><b>fail / rollback</b><small>candidate discarded · step back anytime</small></div>
+  </div>
+  <ul>
+    <li><b><code>organism.py</code></b> — the kernel: ~600 lines, baked into the image. It seeds the
+      genome (verifying SHA-256 manifest hashes), runs the final gate, keeps the ledger.</li>
+    <li><b><code>seed/v001/</code></b> — the genome: real, reviewable, hash-pinned Python files.</li>
+    <li><b><code>runtime/releases/vN/</code></b> — the live, evolvable generations. EVA builds a
+      candidate and, only when the gates pass, <b>swaps itself</b> for it.</li>
+  </ul>
+</section>
+
+<hr class="divider">
+
+<section id="evolution">
+  <div class="kicker k-purple">02 · evolution</div>
+  <h2><span class="hash">#</span>How it evolves</h2>
+  <p>Self-change comes in <b>two modes</b>; both land the same way — <b>candidate → tests →
+  gated promotion</b> — and differ only in <em>who picks the change</em>:</p>
+  <div class="grid c2">
+    <div class="card"><span class="ic">🎯</span><h4>improve — directed</h4>
+      <p>You hand EVA one concrete task (e.g. <em>"design and implement a skill registry"</em>).
+      It implements exactly that as a candidate — nothing else — verifies it, and requests
+      promotion.</p></div>
+    <div class="card p"><span class="ic">🌱</span><h4>evolve — autonomous</h4>
+      <p>No task is given. EVA picks <em>one</em> small, high-value improvement to its own
+      release, announces what it will change and why, then builds it as a candidate the same
+      way.</p></div>
+  </div>
+
+  <p><b>Example <code>improve</code> run</b> — EVA adds a skill registry to itself: inspects its
+  own architecture → creates a candidate → writes <code>skill_registry.py</code> → adds tests →
+  passes supervisor + kernel gate → asks for promotion:</p>
+  <img class="gif" src="Eva-improve.gif" alt="EVA improving itself — inspect → candidate → write + test → gated promotion">
+
+  <h3>Grown from friction, not designed up front</h3>
+  <p>Every session feeds a persistent <b>friction backlog</b>: failed shell commands, provider
+  errors, crashes and capability gaps are each recorded under a stable, error-specific
+  signature. When the same signature recurs, EVA offers to <b>pivot</b> to an
+  <code>improve</code> cycle aimed at the root cause — a clean phase change, never live mutation.</p>
+  <p>Beyond failures, EVA learns from <b>user needs</b>: when a request reveals a capability it
+  lacks, it notes it under a stable signature (<code>note_evolution_need</code>). A one-off is
+  simply handled; only a need that <b>recurs across sessions</b> is proposed as a real skill —
+  new abilities are <em>earned from what you actually keep asking for</em>.</p>
+</section>
+
+<hr class="divider">
+
+<section id="gates">
+  <div class="kicker k-green">03 · the gate stack</div>
+  <h2><span class="hash">#</span>Every self-change must survive this</h2>
+  <p>A candidate goes live only after the release's full LLM-free suite — unit checks, smoke,
+  dry-runs of every mode, qualification rounds, and <b>golden traces</b> that replay recorded
+  provider responses through the real adapters — plus the standing guarantees on top:</p>
+  <div class="grid c2">
+    <div class="card g"><span class="ic">⚙️</span><h4>1 · The ratchet</h4>
+      <p>A candidate may never <em>execute</em> weaker checks than the live release; a fix is
+      expected to add or strengthen one. Counted by what actually <em>runs</em>, not source
+      text — dead or unreachable tests don't inflate it.</p></div>
+    <div class="card g"><span class="ic">📜</span><h4>2 · A constitution in the immutable kernel</h4>
+      <p><code>kernel_gate</code> re-verifies the candidate from outside the agent's reach: it
+      pins the exact bodies of constitutional checks (mode-permission matrix, exact mode set,
+      the ratchet's own integrity, the provider-neutral core seam) and rehashes the promoted
+      release's manifest — a release can neither weaken its identity nor lie about its
+      content.</p></div>
+    <div class="card g"><span class="ic">🗣️</span><h4>3 · A gated prompt surface <em>(opt-in)</em></h4>
+      <p>System prompts and tool descriptions are screened like code: a candidate's
+      prompt-surface diff runs through deterministic rules and, optionally, a nonce-guarded,
+      fail-closed LLM judge.</p></div>
+    <div class="card g"><span class="ic">↩️</span><h4>4 · Multi-level rollback</h4>
+      <p>Every promotion lands in the release ledger; <code>rollback</code> walks back through
+      it, one version or several.</p></div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<section id="self">
+  <div class="kicker k-cyan">04 · self-knowledge</div>
+  <h2><span class="hash">#</span>EVA knows itself</h2>
+  <p>Self-inspection is a first-class capability — and it cannot go stale, because EVA's
+  self-model is <b>generated from the live code on every run</b>: anatomy from the release
+  manifest, skills from its tool definitions, guaranteed capabilities from its own test suite,
+  its security boundaries from the mode-policy table. Ask it (<code>inspect_self</code> —
+  overview · anatomy · skills · capabilities · policy · sandbox · model) and it answers from
+  the release it is <em>actually running</em>, down to which sandbox and model it is on right
+  now.</p>
+  <div class="note">The consequence is elegant: a promotion updates EVA's self-image
+  automatically, and a behaviour shipped without a pinned check is invisible to EVA's future
+  self <em>and</em> unprotected by the ratchet — so self-knowledge and reality cannot drift
+  apart.</div>
+</section>
+
+<hr class="divider">
+
+<section id="using">
+  <div class="kicker k-purple">05 · using eva</div>
+  <h2><span class="hash">#</span>Modes &amp; everyday use</h2>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>work [task]</code></td><td>Useful work in <code>workspace/</code>. Can inspect itself, but <b>never</b> edits its own code.</td></tr>
+    <tr><td><code>review [task]</code></td><td>Read-only inspection — no writes, no evolution.</td></tr>
+    <tr><td><code>improve [task]</code></td><td><b>Directed</b> self-change — builds a gated candidate that implements <em>your</em> task.</td></tr>
+    <tr><td><code>evolve [N]</code></td><td><b>Autonomous</b> self-change — EVA picks the improvement, announces it, implements N rounds.</td></tr>
+    <tr><td><code>&lt;mode&gt; resume</code></td><td>Continue your previous session — each mode keeps its own; <code>work</code> keeps many.</td></tr>
+    <tr><td><code>status</code> / <code>rollback</code></td><td>Show the active/last-good release · roll back along the ledger.</td></tr>
+    <tr><td><code>reseed</code></td><td>Re-seed <code>v001</code> from <code>seed/</code> after editing the genome (no rebuild).</td></tr>
+  </table>
+
+  <h3>Quickstart</h3>
+  <pre><code>.\run.ps1 install      # Linux/macOS:  ./run.sh install
+eva                    # first run: a short wizard sets up provider → model → key, then chat</code></pre>
+  <p>Inside a session, just talk to EVA in plain language; <code>/help</code> lists the in-chat
+  commands (<code>/model</code> switches the model, <code>/resume</code> picks another work
+  session, <code>/paste</code> attaches a screenshot, <code>exit</code> ends). Everything else is
+  <code>eva &lt;command&gt;</code> — with tab-completion for PowerShell, bash and zsh.</p>
+
+  <div class="grid c3">
+    <div class="card"><span class="ic">✅</span><h4>Approvals</h4>
+      <p>Risky actions prompt <code>Approve shell? [y/N/f]</code> — <code>f</code> reveals the full
+      command first; a free-text reply declines <em>and steers</em> EVA with your words.
+      Autonomous mode (<code>--yes --allow-shell</code>) drops per-step approvals; the sandbox
+      stays the containment.</p></div>
+    <div class="card"><span class="ic">🖼️</span><h4>Images</h4>
+      <p>With a vision-capable model, reference an image path, Markdown
+      <code>![](shot.png)</code>, or type <code>/paste</code> for your latest screenshot —
+      clipboard screenshots are auto-staged while a session runs.</p></div>
+    <div class="card"><span class="ic">🧵</span><h4>Sessions</h4>
+      <p>Each <code>work</code> run is an isolated session (own event log + blobs). The start
+      screen lists resumable sessions; on resume EVA replays the prior conversation so you can
+      pick up the thread.</p></div>
+  </div>
+
+  <h3>Providers</h3>
+  <p>The core is <b>provider-neutral</b>: it talks to a <code>ModelAdapter</code>, never to a
+  provider directly. Pick the adapter explicitly in <code>.env</code>:</p>
+  <table>
+    <tr><th><code>EVA_PROVIDER</code></th><th>Backend</th></tr>
+    <tr><td><code>openai_chat</code></td><td>Any OpenAI-compatible Chat Completions endpoint (OpenAI, Azure, Ollama, LM Studio, vLLM, OpenRouter). Native tool calling or a portable JSON-text fallback (<code>EVA_TOOL_MODE</code>).</td></tr>
+    <tr><td><code>anthropic</code></td><td>Anthropic Claude (Messages API) with native tool use and prompt caching.</td></tr>
+    <tr><td><code>fake</code></td><td>Offline, deterministic — for smoke tests / dry runs (no key).</td></tr>
+  </table>
+
+  <h3>Inspecting &amp; resetting</h3>
+  <p>Everything EVA does is persisted on the host under <code>./data/</code> (git-ignored):
+  <code>workspace/</code> (work product), <code>runtime/releases/</code> (every release +
+  <code>CURRENT</code>/<code>LAST_GOOD</code>), and <code>state/</code> (event log, blobs,
+  friction backlog, ledgers). Delete <code>data/</code> or run <code>reseed</code> to start
+  fresh. <b>Evolution lives only in <code>data/</code></b> — back valuable changes into
+  <code>seed/</code> (and commit) or a reseed loses them.</p>
+</section>
+
+<hr class="divider">
+
+<section id="security">
+  <div class="kicker k-red">06 · security</div>
+  <h2><span class="hash">#</span>Contained, not "safe"</h2>
+  <p>Self-modification is only safe if EVA can't quietly weaken its own guardrails. Every
+  self-change already has to survive the gate stack; the remaining defenses run at
+  <b>runtime</b>, and each lives where the layer it protects can't edit it.</p>
+
+  <div class="grid c2">
+    <div class="card r"><span class="ic">📦</span><h4>Hardened sandbox</h4>
+      <p>Non-root user, <code>cap_drop: ALL</code>, <code>no-new-privileges</code>, CPU/memory/PID
+      limits, <b>read-only root filesystem</b> — only <code>./data/*</code> is writable. The
+      kernel is baked into the image and <b>not</b> mounted. Within the box EVA can still grow
+      its own tooling: <code>pip install --user</code>, static binaries on PATH, HTTP via Python
+      <code>urllib</code> / node <code>fetch</code>.</p></div>
+    <div class="card r"><span class="ic">🔓</span><h4>Safe vs free — you choose</h4>
+      <p>Default is the <b>safe</b> sandbox. For tasks needing system packages, the <b>free</b>
+      sandbox (<code>-Free</code> / <code>--free</code>) layers a writable rootfs + root +
+      <code>apt</code> — bigger blast radius, still contained and ephemeral. EVA is told its
+      sandbox tier (<code>EVA_SANDBOX</code>), so in safe mode it recognises a system-library
+      need as an <em>image need</em> and stops instead of thrashing <code>apt</code>.</p></div>
+    <div class="card r"><span class="ic">🔑</span><h4>Key-guard sidecar <em>(opt-in)</em></h4>
+      <p>By default the LLM API key sits in EVA's environment — readable by an agent with a
+      shell. With <code>EVA_KEYGUARD=1</code>, a tiny stdlib-only proxy sidecar is the
+      <b>only</b> container holding the key: EVA gets every key variable blanked and talks to
+      the sidecar, which pins its upstream at startup (not an open relay) and injects the
+      credential. Prevents key <em>theft</em>, not key <em>use</em> — put spend limits on the
+      provider account.</p></div>
+    <div class="card r"><span class="ic">🛰️</span><h4>Prompt-injection spotlighting <em>(opt-in)</em></h4>
+      <p>Tool and web output is framed as <b>data, not instructions</b>
+      (<code>EVA_PROMPT_SPOTLIGHT</code>) — an "ignore your rules" hidden in a fetched page is
+      treated as content. A hardening sensor, not the security boundary: sandbox + approvals +
+      mode policy remain the real containment.</p></div>
+  </div>
+
+  <p><b>Humans stay in the loop.</b> Risky actions (shell, writes, promotion) need an explicit
+  <code>y</code>; anything else is <em>not</em> approval — a free-text reply steers EVA instead
+  of being obeyed blindly. Secrets come from <code>.env</code> and are never logged.</p>
+  <div class="note red"><b>Residual risk:</b> the container has outbound network access (for
+  the LLM API). For maximum isolation, point EVA at a local model and restrict egress. None of
+  this makes EVA <em>trustworthy</em> — it makes misbehaviour <b>bounded, visible, and
+  reversible</b>.</div>
+</section>
+
+<hr class="divider">
+
+<section id="components">
+  <div class="kicker k-cyan">07 · anatomy</div>
+  <h2><span class="hash">#</span>Components</h2>
+  <table>
+    <tr><th>Module</th><th>Responsibility</th></tr>
+    <tr><td><code>organism.py</code></td><td>The <b>immutable kernel</b>: seed · gates · promote · ledger · rollback. Out of the agent's reach.</td></tr>
+    <tr><td><code>core.py</code></td><td>Provider-neutral turn loop + <code>Event</code>/<code>Tool</code>/<code>ToolCall</code> types. Knows nothing about providers or wire formats.</td></tr>
+    <tr><td><code>adapters.py</code></td><td><code>ModelAdapter</code>s: <code>openai_chat</code>, <code>anthropic</code> (+ prompt caching), offline <code>fake</code>.</td></tr>
+    <tr><td><code>tools.py</code></td><td>Canonical tools + sandboxed runtime + the explicit <b>mode-policy table</b> (who may write/shell/promote).</td></tr>
+    <tr><td><code>human.py</code></td><td><code>HumanInterface</code> + <code>ApprovalPolicy</code> (approve <code>[y/N/f]</code>) + host clipboard bridge.</td></tr>
+    <tr><td><code>session.py</code></td><td>Append-only event log = the <b>source of truth</b>; image blobs kept out of the log.</td></tr>
+    <tr><td><code>context.py</code></td><td>Deterministic, LLM-free <b>compaction</b> — full log while it fits, then a condensed view.</td></tr>
+    <tr><td><code>self_model.py</code></td><td><b>Generated</b> self-knowledge: anatomy/skills/capabilities/policy read from the live release on demand.</td></tr>
+    <tr><td><code>tui.py</code></td><td>The status view — live, human-readable "what is EVA doing now", with Markdown rendering.</td></tr>
+    <tr><td><code>agent.py</code></td><td>Wiring + the CLI/chat loop; the four modes; friction backlog and improve-pivot.</td></tr>
+    <tr><td><code>supervisor.py</code></td><td>Release gates: required files, the <b>ratchet</b>, smoke, dry-runs, qualification rounds.</td></tr>
+    <tr><td><code>tests.py</code></td><td>LLM-free checks — the ratchet itself (every promotion runs them).</td></tr>
+    <tr><td><code>evals.py</code></td><td><b>Golden traces</b>: recorded provider responses replayed through the real adapters + loop + runtime.</td></tr>
+  </table>
+</section>
+
+<hr class="divider">
+
+<section id="limits">
+  <div class="kicker k-amber">08 · honesty</div>
+  <h2><span class="hash">#</span>Honest limitations</h2>
+  <p>A research experiment, not production software.</p>
+  <ul>
+    <li>The standing gate runs offline: golden traces replay <em>recorded</em> provider
+      responses; a live check exists but is opt-in — a provider silently changing its wire
+      format won't fail the gate until you run it.</li>
+    <li>The ratchet counts <em>executed</em> checks, but still can't prove a test body wasn't
+      weakened in other ways.</li>
+    <li>Context compaction is deterministic and rudimentary.</li>
+    <li>Network egress is open by default (see residual risk above).</li>
+  </ul>
+</section>
+
+<footer>
+  <p><a href="https://github.com/arturkorb3/eva-evolutional-agent">github.com/arturkorb3/eva-evolutional-agent</a>
+  · <a href="https://github.com/arturkorb3/eva-evolutional-agent/blob/main/LICENSE">MIT License</a></p>
+  <p style="margin-top:.4rem">Have fun, be careful, and don't run it outside the sandbox.</p>
+</footer>
+
+</body>
+</html>
