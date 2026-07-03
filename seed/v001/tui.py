@@ -327,9 +327,81 @@ def render_markdown_tables(text: str) -> str:
     return "\n".join(out)
 
 
+_MD_HEADING = re.compile(r"^(#{1,3})\s+(.+)$")
+_MD_BULLET = re.compile(r"^(\s*)-\s+(?=\S)")
+_MD_CODE = re.compile(r"`([^`\n]+)`")
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _is_fence(s: str) -> bool:
+    return s.lstrip().startswith("```")
+
+
+def _md_inline(s: str, *, color: bool) -> str:
+    # `code` spans are styled first and PROTECT their content from bold rendering,
+    # so shell snippets like `echo **x**` survive verbatim.
+    def bold(seg: str) -> str:
+        return _MD_BOLD.sub(lambda m: _paint(m.group(1), "bold", color=color), seg)
+    parts, last = [], 0
+    for m in _MD_CODE.finditer(s):
+        parts.append(bold(s[last:m.start()]))
+        parts.append(_paint(m.group(1), "cyan", color=color))
+        last = m.end()
+    parts.append(bold(s[last:]))
+    return "".join(parts)
+
+
+def render_markdown_line(line: str, *, color: bool = True) -> str:
+    """Render ONE prose line of markdown for the terminal: **bold** and `code` get ANSI
+    styling, #-headings lose their hashes, and '- ' bullets become dots. Deliberately
+    conservative - no italics (too many false positives: globs, snake_case). With colour
+    off the line passes through UNCHANGED (markers kept, nothing lost). Pure function."""
+    if not color:
+        return line
+    m = _MD_HEADING.match(line)
+    if m:
+        return _paint(m.group(2), "bold", "cyan", color=color)
+    line = _MD_BULLET.sub(lambda b: b.group(1) + "\u2022 ", line)
+    return _md_inline(line, color=color)
+
+
+def render_markdown(text: str, *, color: bool = True) -> str:
+    """Terminal markdown for assistant text: box tables always; with colour on also
+    inline bold/code, headings and bullets, with ``` fences dimmed and their content
+    protected from any styling or table detection. Pure function, so live output,
+    replay and finish summaries all render the same."""
+    lines = (text or "").split("\n")
+    out, i, n, fence = [], 0, len(lines), False
+    while i < n:
+        line = lines[i]
+        if _is_fence(line):
+            fence = not fence
+            out.append(_paint(line, "dim", color=color))
+            i += 1
+            continue
+        if fence:
+            out.append(_paint(line, "dim", color=color))
+            i += 1
+            continue
+        if _is_table_row(line) and i + 1 < n and _is_table_sep(lines[i + 1]):
+            block = [lines[i], lines[i + 1]]
+            i += 2
+            while i < n and _is_table_row(lines[i]):
+                block.append(lines[i])
+                i += 1
+            try:
+                out.append(_render_table(block))
+            except Exception:
+                out.extend(block)      # never let rendering swallow content
+            continue
+        out.append(render_markdown_line(line, color=color))
+        i += 1
+    return "\n".join(out)
+
+
 def format_say(text: str, *, color: bool = True) -> str:
     return _paint("● EVA ", "bold", "magenta", color=color) + \
-        render_markdown_tables((text or "").strip())
+        render_markdown((text or "").strip(), color=color)
 
 
 def format_tool_call(call, *, color: bool = True, full: bool = False) -> str:
@@ -339,7 +411,7 @@ def format_tool_call(call, *, color: bool = True, full: bool = False) -> str:
     if name == "finish":
         # finish carries EVA's final message to the user - show it IN FULL (preserving
         # line breaks + rendering any markdown table), never truncated like a gist.
-        summ = render_markdown_tables(str(args.get("summary", "") or "done").strip())
+        summ = render_markdown(str(args.get("summary", "") or "done").strip(), color=color)
         head = _paint("\u2713 finished", "bold", "green", color=color)
         return head + (": " + summ if summ else "")
     # Shell commands are what a human approves, so show a bit more of them.
@@ -504,6 +576,7 @@ class StatusView:
         self._sbuf = ""
         self._hold = None
         self._tbl = None
+        self._fence = False
         self._said_prefix = False
         # Live elapsed-time spinner for long tool calls (real TTY only).
         self._spin_stop = None
@@ -692,6 +765,7 @@ class StatusView:
             if not self._said_prefix and text and text.strip():
                 self._w(format_say(text, color=self.color))
             self._streaming = False
+            self._fence = False
             self._said_prefix = False
             return
         if text and text.strip():
@@ -709,6 +783,7 @@ class StatusView:
             self._sbuf = ""
             self._hold = None
             self._tbl = None
+            self._fence = False
             self._said_prefix = False
         self._sbuf += chunk
         while "\n" in self._sbuf:
@@ -719,7 +794,20 @@ class StatusView:
         # A tiny state machine over completed lines: collect a markdown-table block (header
         # + `---` separator + rows) and render it as a box table; stream every other line as
         # prose. One line of lookahead is needed (a `|...|` line is only a table once the
-        # NEXT line is the separator), hence the held candidate.
+        # NEXT line is the separator), hence the held candidate. ``` fences toggle a
+        # protected span: their content is dimmed verbatim (no table/inline rendering).
+        if _is_fence(line):
+            if self._tbl is not None:
+                self._flush_table()
+            if self._hold is not None:
+                self._emit_line(self._hold)
+                self._hold = None
+            self._fence = not self._fence
+            self._emit_line(line)
+            return
+        if self._fence:
+            self._emit_line(line)
+            return
         if self._tbl is not None:
             if _is_table_row(line):
                 self._tbl.append(line)
@@ -741,7 +829,10 @@ class StatusView:
         if not self._said_prefix:
             self._raw(_paint("● EVA ", "bold", "magenta", color=self.color))
             self._said_prefix = True
-        self._w(line)
+        if self._fence or _is_fence(line):
+            self._w(_paint(line, "dim", color=self.color))
+        else:
+            self._w(render_markdown_line(line, color=self.color))
 
     def _flush_table(self) -> None:
         if self._tbl is None:

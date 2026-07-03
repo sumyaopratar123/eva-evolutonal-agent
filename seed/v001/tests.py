@@ -1481,6 +1481,37 @@ def check_tui_renders_markdown_tables():
     assert "\u250c" in tui.format_say(md, color=False)
 
 
+def check_tui_renders_markdown_beyond_tables():
+    """Assistant markdown renders for the terminal beyond tables: **bold** and `code`
+    get ANSI styling, #-headings lose their hashes, '- ' bullets become dots, and
+    ``` fenced code is dimmed with its content protected from inline styling (shell
+    examples survive verbatim). With colour off the text passes through UNCHANGED (no
+    information loss), and the line-buffered streamer applies the same rendering live."""
+    import io
+    import tui
+    md = ("# Title\n- item **hot** and `x=1`\n"
+          "```\n**not bold** | a | b |\n```\nend")
+    out = tui.render_markdown(md, color=True)
+    plain = tui._ANSI_RE.sub("", out)
+    assert "# Title" not in plain and "Title" in plain          # heading hashes gone
+    assert "**hot**" not in plain and "hot" in plain            # bold markers rendered
+    assert "`x=1`" not in plain and "x=1" in plain              # code span rendered
+    assert "\u2022 item" in plain                               # bullet becomes a dot
+    assert "**not bold**" in plain and "| a | b |" in plain     # fence content verbatim
+    assert "\x1b[" in out                                       # ANSI styling applied
+    # colour off -> byte-identical passthrough (dumb terminals lose nothing)
+    assert tui.render_markdown(md, color=False) == md
+    # the live streamer renders the same rules line by line
+    buf = io.StringIO()
+    v = tui.StatusView(mode="work", stream=buf, color=True)
+    for i in range(0, len(md) + 1, 7):
+        v.on_say_delta(md[i:i + 7])
+    v.say(md)
+    stream_plain = tui._ANSI_RE.sub("", buf.getvalue())
+    assert "**hot**" not in stream_plain and "\u2022 item" in stream_plain
+    assert "**not bold**" in stream_plain                       # fence protected live too
+
+
 def check_tool_progress_hook_and_spinner_are_tty_gated():
     """The runtime calls its progress hook right before a slow op (so the TUI can show a live
     elapsed timer during a long shell/fetch), and the TUI spinner writes NOTHING to a non-TTY
