@@ -242,6 +242,26 @@ eva_onboarding() {
     fi
   fi
 
+  # Optional extras - everyday preferences only; one gate question, Enter skips all.
+  local s t cur_s cur_t
+  if [ "$fresh" = "1" ] || [ "$force" = "force" ]; then
+    printf "Configure optional extras - streaming, timeout? [y/N] "
+    read -r ans </dev/tty || ans=""
+    if [[ "$ans" =~ ^[yY]([eE][sS])?$ ]]; then
+      cur_s="on"; case "$(read_env_val EVA_STREAM)" in 0|false|no|off) cur_s="off" ;; esac
+      printf "Stream replies live while they generate? [y/n] (Enter keeps %s) " "$cur_s"
+      read -r s </dev/tty || s=""
+      case "$s" in
+        y|Y|yes|YES) set_env_var EVA_STREAM 1; did=1 ;;
+        n|N|no|NO)   set_env_var EVA_STREAM 0; did=1 ;;
+      esac
+      cur_t="$(read_env_val LLM_TIMEOUT)"; [ -z "$cur_t" ] && cur_t=180
+      printf "Model timeout in seconds (Enter keeps %s): " "$cur_t"
+      read -r t </dev/tty || t=""
+      [[ "$t" =~ ^[0-9]+$ ]] && { set_env_var LLM_TIMEOUT "$t"; did=1; }
+    fi
+  fi
+
   # Recap what is configured now (key masked) and flag anything still missing, so a
   # skipped prompt fails HERE with a hint instead of later with a cryptic HTTP error.
   local model="" key="" masked v
@@ -392,7 +412,7 @@ Usage: ./run.sh <command> [args]   (or, after `install`, simply:  eva <command> 
 
 Getting started:
   install               One-time setup: `eva` on PATH + tab-completion (+ optional build)
-  setup                 (Re)configure .env: provider, model, API key (Enter keeps current)
+  setup                 (Re)configure .env: provider, model, key + extras (Enter keeps current)
   eva                   Start chatting - bare `eva` opens a work session (default)
   help                  Show this overview (in chat, type /help instead)
 

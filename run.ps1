@@ -258,6 +258,21 @@ function Invoke-EvaOnboarding {
         }
     }
 
+    # Optional extras - everyday preferences only; one gate question, Enter skips all.
+    if ($fresh -or $Force) {
+        $ans = (Read-Host "Configure optional extras - streaming, timeout? [y/N]").Trim()
+        if ($ans -match '^(y|yes)$') {
+            $map = Read-EnvMap $script:EnvFull
+            $curS = if ($map["EVA_STREAM"] -match '^(0|false|no|off)$') { "off" } else { "on" }
+            $s = (Read-Host "Stream replies live while they generate? [y/n] (Enter keeps $curS)").Trim()
+            if ($s -match '^(y|yes)$') { Set-EnvVar "EVA_STREAM" "1"; $did = $true }
+            elseif ($s -match '^(n|no)$') { Set-EnvVar "EVA_STREAM" "0"; $did = $true }
+            $curT = $map["LLM_TIMEOUT"]; if ([string]::IsNullOrWhiteSpace($curT)) { $curT = "180" }
+            $t = (Read-Host "Model timeout in seconds (Enter keeps $curT)").Trim()
+            if ($t -match '^\d+$') { Set-EnvVar "LLM_TIMEOUT" $t; $did = $true }
+        }
+    }
+
     # Recap what is configured now (key masked) and flag anything still missing, so a
     # skipped prompt fails HERE with a hint instead of later with a cryptic HTTP error.
     $map = Read-EnvMap $script:EnvFull
@@ -448,7 +463,7 @@ Usage: .\run.ps1 <command> [args]   (or, after `install`, simply:  eva <command>
 
 Getting started:
   install               One-time setup: `eva` on PATH + tab-completion (+ optional build)
-  setup                 (Re)configure .env: provider, model, API key (Enter keeps current)
+  setup                 (Re)configure .env: provider, model, key + extras (Enter keeps current)
   eva                   Start chatting - bare `eva` opens a work session (default)
   help                  Show this overview (in chat, type /help instead)
 
