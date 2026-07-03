@@ -112,6 +112,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
 .note.red{border-left-color:var(--red);background:rgba(255,59,92,.05)}
 @media(max-width:640px){section{padding:3rem 1.1rem 1rem}h2{font-size:1.55rem}}
 </style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.css">
 </head>
 <body>
 
@@ -225,10 +226,11 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
       way.</p></div>
   </div>
 
-  <p><b>Example <code>improve</code> run</b> — EVA adds a skill registry to itself: inspects its
-  own architecture → creates a candidate → writes <code>skill_registry.py</code> → adds tests →
-  passes supervisor + kernel gate → asks for promotion:</p>
-  <img class="gif" src="Eva-improve.gif" alt="EVA improving itself — inspect → candidate → write + test → gated promotion">
+  <p><b>Live <code>improve</code> run</b> (real, unedited session — 3 minutes): EVA is asked to
+  <em>"give yourself a soul"</em>. It creates a candidate, writes <code>soul.md</code>, protects
+  it with a new ratchet check, passes 87/87 checks and both gates — and is promoted to
+  <b>v002</b>. Milestones are marked on the timeline (jump with <kbd>[</kbd>/<kbd>]</kbd>):</p>
+  <div id="improve-player" class="gif" style="padding:0;overflow:hidden"></div>
 
   <h3>Grown from friction, not designed up front</h3>
   <p>Where does the pressure to evolve come from? From the <b>environment</b> — real usage.
@@ -443,5 +445,12 @@ eva                    # first run: a short wizard sets up provider → model �
   <p style="margin-top:.4rem">Have fun, be careful, and don't run it outside the sandbox.</p>
 </footer>
 
+<script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.min.js"></script>
+<script>
+  AsciinemaPlayer.create('improve.cast', document.getElementById('improve-player'), {
+    theme: 'dracula', fit: 'width', idleTimeLimit: 5, speed: 1.25,
+    poster: 'npt:0:05', controls: true
+  });
+</script>
 </body>
 </html>
