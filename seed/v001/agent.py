@@ -780,7 +780,7 @@ def run_mode(mode: str, task: str):
         if interactive and not want_resume:
             # Surface resumable sessions right on the start screen (discoverability).
             view.session_overview(_work_session_rows(), current=session_id)
-        print(f"(session {session_id} \u2014 resume later with:  work resume {session_id})")
+        view.notice(f"session {session_id} \u2014 resume later with:  work resume {session_id}")
 
     resumed = False
     if want_resume:
@@ -794,10 +794,10 @@ def run_mode(mode: str, task: str):
             else:
                 # Autonomous resume (AUTO_YES) has no human to prompt: nudge EVA on.
                 state.session.append(Event(role="user", content="Continue the previous session."))
-            print(f"\n(resuming previous {mode} session: {len(state.session.events())} events)")
+            view.notice(f"resuming previous {mode} session: {len(state.session.events())} events")
             resumed = True
         else:
-            print("\n(no resumable session found; starting fresh)")
+            view.notice("no resumable session found \u2014 starting fresh")
             task = ""
 
 

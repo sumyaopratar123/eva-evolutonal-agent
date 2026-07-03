@@ -779,7 +779,10 @@ def check_tui_status_view_renders_activity():
     tui.StatusView(mode="work", identity={"model": "gpt-5.5"}, release="v001",
                    stream=buf_w, color=False).welcome()
     wtext = buf_w.getvalue()
-    assert "mode=work" in wtext and "EVA_TUI_FULL" in wtext
+    # the tips point at live in-chat discoverability (/help, /status, /last),
+    # not at env-var plumbing
+    assert "mode=work" in wtext and "/help" in wtext
+    assert "/status" in wtext and "/last" in wtext
 
     # presentation only: no provider/transport imports
     forbidden = ("urllib", "requests", "http", "httpx", "openai", "socket")
@@ -1156,6 +1159,27 @@ def check_start_screen_lists_resumable_sessions():
     tui.StatusView(mode="work", stream=buf2, color=False).session_overview(
         [("only", 1, "t", False)], current="only")
     assert buf2.getvalue().strip() == ""
+
+
+def check_start_flow_uses_styled_notices_and_dual_resume_hint():
+    """The work start flow speaks with one voice: the session-id line and the
+    resume/fresh-start outcomes go through the StatusView notice channel (styled,
+    stream-bound) instead of bare print(), and the start screen's resume hint offers
+    both paths - /resume <id> right now (in chat) and `work resume <id>` at the next
+    launch - so the user is never sent out of the chat to do an in-chat thing."""
+    import inspect
+    import io
+    import agent
+    import tui
+    src = inspect.getsource(agent.run_mode)
+    assert 'view.notice(f"session' in src, "session line must use the styled notice channel"
+    assert "resuming previous" in src and "no resumable session" in src
+    assert 'print(f"\\n(resuming' not in src and 'print("\\n(no resumable' not in src
+    buf = io.StringIO()
+    tui.StatusView(mode="work", stream=buf, color=False).session_overview(
+        [("20990101-000000-aaaa", 3, "task", True)], current="other")
+    out = buf.getvalue()
+    assert "/resume" in out and "work resume" in out
 
 
 def check_prompt_input_is_comfortable_and_dependency_free():

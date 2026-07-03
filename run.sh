@@ -345,20 +345,27 @@ EVA - Evolvable Virtual Agent (Docker sandbox)
 
 Usage: ./run.sh <command> [args]   (or, after `install`, simply:  eva <command> [args])
 
-  build                 Build (or rebuild) the sandbox image
-  install               Set up the `eva` command: PATH + tab-completion (+ optional build)
-  uninstall             Undo `install` (remove symlink + shell rc block)
-  status                Show current / last-good release
+Getting started:
+  install               One-time setup: `eva` on PATH + tab-completion (+ optional build)
+  eva                   Start chatting - bare `eva` opens a work session (default)
+  help                  Show this overview (in chat, type /help instead)
+
+Sessions (modes are chosen at launch):
   work    [task]        Useful work in workspace/ (default mode)
   improve [task]        Evolve a candidate release
   review  [task]        Read-only inspection
-  paste                 Save a clipboard screenshot into data/workspace/ (needs pngpaste/wl-paste/xclip)
   evolve  [N] [flags]   Run N autonomous evolution rounds
+  paste                 Save a clipboard screenshot into data/workspace/ (needs pngpaste/wl-paste/xclip)
+
+Organism & sandbox:
+  status                Show current / last-good release
   rollback [--force]    Roll back to the last good release
   unlock                Clear a dead evolution lock (single-writer guard)
   reseed                Re-seed v001 from seed/ (after editing the genome; no rebuild)
+  build                 Build (or rebuild) the sandbox image
   shell                 Open a shell inside the container (debug)
   fix-perms             Reset ./data ownership to the sandbox user (after a --free run)
+  uninstall             Undo `install` (remove symlink + shell rc block)
 
 Sandbox mode:
   --free <command>      Run in the FREE sandbox (writable rootfs + root + apt) instead of

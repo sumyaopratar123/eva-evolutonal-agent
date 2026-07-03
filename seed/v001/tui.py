@@ -123,8 +123,8 @@ _BRAND_ART = (
 _USAGE_TIPS = (
     "Just tell EVA what to do — it works, then replies after each turn.",
     "Type /help for in-chat commands; /paste attaches your latest screenshot.",
+    "/status shows where you stand; /last re-shows clipped tool output in full.",
     "Press Enter on an empty line (or type 'exit') to end the session.",
-    "Set EVA_TUI_FULL=1 to see full commands and complete output.",
 )
 
 
@@ -673,7 +673,8 @@ class StatusView:
             meta = _paint(f"  {n} events  ", "gray", color=self.color)
             self._w("  " + _paint(sid, "cyan", color=self.color) + mark + meta
                     + _clip(first, 50))
-        self._w(_paint("  \u2192 work resume <id>   (or `work resume` for the most recent)",
+        self._w(_paint("  \u2192 /resume <id> right here \u00b7 next launch: work resume <id>"
+                       " (most recent: work resume)",
                        "gray", color=self.color) + "\n")
 
     def say(self, text: str) -> None:
