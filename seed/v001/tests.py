@@ -867,6 +867,51 @@ def check_context_compaction_is_own_llm_free_layer():
         assert store.compact_view(1000, 6) == small
 
 
+def check_context_summary_includes_tool_outcome():
+    """The condensed summary of dropped steps carries an OUTCOME snippet per tool
+    call (exit code / first result line), not just the tool name - otherwise the
+    model can't tell after compaction whether a prior step succeeded and wastes
+    turns re-investigating work it already did."""
+    import context as context_mod
+
+    dropped = [
+        core.Event(role="assistant", content="reading the manifest",
+                   tool_calls=[core.ToolCall("c1", "shell", {"cmd": "cat m"})]),
+        core.Event(role="tool", content="exit=0\nstdout:\n{...}", name="shell",
+                   tool_call_id="c1"),
+        core.Event(role="assistant", content="patching the file",
+                   tool_calls=[core.ToolCall("c2", "replace_in_file", {})]),
+        core.Event(role="tool", content="Error: old text not found", name="replace_in_file",
+                   tool_call_id="c2"),
+    ]
+    summary = context_mod.summarize_dropped(dropped)
+    assert summary is not None
+    assert "shell: exit=0" in summary, summary
+    assert "Error: old text not found" in summary, summary
+
+
+def check_context_summary_parallel_tool_calls():
+    """When one assistant step makes SEVERAL tool calls in parallel, the condensed
+    summary preserves every call (name + outcome), not only the first - so
+    compaction never silently erases half of what a step did."""
+    import context as context_mod
+
+    dropped = [
+        core.Event(role="assistant", content="parallel probe",
+                   tool_calls=[core.ToolCall("p1", "read_file", {}),
+                               core.ToolCall("p2", "web_search", {})]),
+        core.Event(role="tool", content="#!/usr/bin/env python3", name="read_file",
+                   tool_call_id="p1"),
+        core.Event(role="tool", content="Results for: python release", name="web_search",
+                   tool_call_id="p2"),
+    ]
+    summary = context_mod.summarize_dropped(dropped)
+    assert summary is not None
+    line = [l for l in summary.splitlines() if "parallel probe" in l][0]
+    assert "read_file" in line and "web_search" in line, line
+    assert "Results for: python release" in line, line
+
+
 def check_blob_store_keeps_images_out_of_the_log():
     """Image attachments are stored on disk as small blob references
     (state/blobs/<sha256>), not fat inline data-URLs, and rehydrate to provider-neutral
