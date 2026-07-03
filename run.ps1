@@ -155,7 +155,8 @@ function Show-EnvTip {
 }
 
 function Invoke-EvaOnboarding {
-    if ($env:EVA_NO_SETUP -eq "1") { return }
+    param([switch]$Force)
+    if ($env:EVA_NO_SETUP -eq "1" -and -not $Force) { return }
     $fresh = -not (Test-Path -LiteralPath $script:EnvFull)
     $did = $fresh
 
@@ -164,26 +165,33 @@ function Invoke-EvaOnboarding {
         Write-Host "I don't see a .env config yet." -ForegroundColor Yellow
         $ans = Read-Host "Shall I set up EVA with you now? [Y/n]"
         if ($ans -match '^\s*(n|no)\s*$') {
-            Write-Warning "Skipping setup - EVA may not reach a model without credentials."
+            Write-Warning "Skipping setup - EVA may not reach a model without credentials. Run `eva setup` any time."
             return
         }
         Save-EnvLines @("# EVA configuration (created by run.ps1 setup)")
+    }
+    elseif ($Force) {
+        Write-Host ""
+        Write-Host "Reconfiguring .env - press Enter at any prompt to keep the current value." -ForegroundColor Yellow
     }
 
     $map = Read-EnvMap $script:EnvFull
     $provider = $map["EVA_PROVIDER"]
 
-    if ($fresh -or [string]::IsNullOrWhiteSpace($provider)) {
+    if ($fresh -or $Force -or [string]::IsNullOrWhiteSpace($provider)) {
         Write-Host ""
         Write-Host "Which model provider should EVA use?"
         Write-Host "  [1] OpenAI-compatible  (OpenAI / Azure / Ollama / LM Studio / vLLM / OpenRouter)"
         Write-Host "  [2] Anthropic Claude   (Messages API: native tools + prompt caching)"
         Write-Host "  [3] Offline 'fake'     (no API key; smoke tests / dry runs)"
-        $choice = (Read-Host "Choose [1/2/3] (default 1)").Trim()
+        $hint = if ([string]::IsNullOrWhiteSpace($provider)) { "Choose [1/2/3] (default 1)" }
+        else { "Choose [1/2/3] (Enter keeps '$provider')" }
+        $choice = (Read-Host $hint).Trim()
         switch ($choice) {
+            "1" { $provider = "openai_chat" }
             "2" { $provider = "anthropic" }
             "3" { $provider = "fake" }
-            default { $provider = "openai_chat" }
+            default { if ([string]::IsNullOrWhiteSpace($provider)) { $provider = "openai_chat" } }
         }
         Set-EnvVar "EVA_PROVIDER" $provider
         $map = Read-EnvMap $script:EnvFull
@@ -196,7 +204,8 @@ function Invoke-EvaOnboarding {
     }
 
     if ($provider -eq "anthropic") {
-        if ((Test-Placeholder $map["EVA_MODEL"]) -and (Test-Placeholder $map["LLM_MODEL"])) {
+        $curM = $map["EVA_MODEL"]; if (Test-Placeholder $curM) { $curM = $map["LLM_MODEL"] }
+        if ($Force -or (Test-Placeholder $curM)) {
             Write-Host ""
             Write-Host "Which Claude model?"
             Write-Host "  [1] claude-opus-4-8    (frontier; long-running agents & coding)"
@@ -204,38 +213,68 @@ function Invoke-EvaOnboarding {
             Write-Host "  [3] claude-sonnet-4-6  (best speed / intelligence balance)"
             Write-Host "  [4] claude-haiku-4-5   (fastest, near-frontier)"
             Write-Host "  [5] other              (type a custom model id)"
-            $mc = (Read-Host "Choose [1-5] (default 3)").Trim()
+            $hint = if (Test-Placeholder $curM) { "Choose [1-5] (default 3)" }
+            else { "Choose [1-5] (Enter keeps '$curM')" }
+            $mc = (Read-Host $hint).Trim()
             switch ($mc) {
                 "1" { $m = "claude-opus-4-8" }
                 "2" { $m = "claude-opus-4-6" }
+                "3" { $m = "claude-sonnet-4-6" }
                 "4" { $m = "claude-haiku-4-5" }
                 "5" { $m = (Read-Host "Model id").Trim() }
-                default { $m = "claude-sonnet-4-6" }
+                default { $m = if (Test-Placeholder $curM) { "claude-sonnet-4-6" } else { "" } }
             }
             if (-not [string]::IsNullOrWhiteSpace($m)) { Set-EnvVar "EVA_MODEL" $m; $did = $true }
         }
-        if ((Test-Placeholder $map["EVA_API_KEY"]) -and (Test-Placeholder $map["ANTHROPIC_API_KEY"])) {
-            $k = Read-Secret "Anthropic API key (sk-ant-...) [input hidden]"
+        $keySet = -not ((Test-Placeholder $map["EVA_API_KEY"]) -and (Test-Placeholder $map["ANTHROPIC_API_KEY"]))
+        if ($Force -or -not $keySet) {
+            $prompt = "Anthropic API key (sk-ant-...) [input hidden]"
+            if ($keySet) { $prompt += " (Enter keeps current)" }
+            $k = Read-Secret $prompt
             if (-not [string]::IsNullOrWhiteSpace($k)) { Set-EnvVar "EVA_API_KEY" $k.Trim(); $did = $true }
         }
     }
     elseif ($provider -eq "openai_chat") {
-        if ((Test-Placeholder $map["EVA_ENDPOINT"]) -and (Test-Placeholder $map["LLM_ENDPOINT"])) {
-            $e = Read-Host "Chat Completions endpoint (Enter for https://api.openai.com/v1/chat/completions)"
-            if ([string]::IsNullOrWhiteSpace($e)) { $e = "https://api.openai.com/v1/chat/completions" }
+        $curE = $map["EVA_ENDPOINT"]; if (Test-Placeholder $curE) { $curE = $map["LLM_ENDPOINT"] }
+        if ($Force -or (Test-Placeholder $curE)) {
+            $keep = if (Test-Placeholder $curE) { "https://api.openai.com/v1/chat/completions" } else { $curE }
+            $e = Read-Host "Chat Completions endpoint (Enter for $keep)"
+            if ([string]::IsNullOrWhiteSpace($e)) { $e = $keep }
             Set-EnvVar "EVA_ENDPOINT" $e.Trim(); $did = $true
         }
-        if ((Test-Placeholder $map["EVA_MODEL"]) -and (Test-Placeholder $map["LLM_MODEL"])) {
-            $m = Read-Host "Model name (e.g. gpt-5.5, llama3.1)"
+        $curM = $map["EVA_MODEL"]; if (Test-Placeholder $curM) { $curM = $map["LLM_MODEL"] }
+        if ($Force -or (Test-Placeholder $curM)) {
+            $hint = if (Test-Placeholder $curM) { "Model name (e.g. gpt-5.5, llama3.1)" }
+            else { "Model name (Enter keeps '$curM')" }
+            $m = Read-Host $hint
             if (-not [string]::IsNullOrWhiteSpace($m)) { Set-EnvVar "EVA_MODEL" $m.Trim(); $did = $true }
         }
-        if ((Test-Placeholder $map["EVA_API_KEY"]) -and (Test-Placeholder $map["LLM_API_KEY"]) -and (Test-Placeholder $map["OPENAI_API_KEY"])) {
-            $k = Read-Secret "API key [input hidden] (type 'ollama' for a local server that ignores it)"
+        $keySet = -not ((Test-Placeholder $map["EVA_API_KEY"]) -and (Test-Placeholder $map["LLM_API_KEY"]) -and (Test-Placeholder $map["OPENAI_API_KEY"]))
+        if ($Force -or -not $keySet) {
+            $prompt = "API key [input hidden] (type 'ollama' for a local server that ignores it)"
+            if ($keySet) { $prompt += " (Enter keeps current)" }
+            $k = Read-Secret $prompt
             if (-not [string]::IsNullOrWhiteSpace($k)) { Set-EnvVar "EVA_API_KEY" $k.Trim(); $did = $true }
         }
     }
 
-    if ($did) { Write-Host "Saved to .env - starting EVA..." -ForegroundColor Green; Show-EnvTip; Write-Host "" }
+    # Recap what is configured now (key masked) and flag anything still missing, so a
+    # skipped prompt fails HERE with a hint instead of later with a cryptic HTTP error.
+    $map = Read-EnvMap $script:EnvFull
+    $model = @($map["EVA_MODEL"], $map["LLM_MODEL"]) | Where-Object { -not (Test-Placeholder $_) } | Select-Object -First 1
+    $key = @($map["EVA_API_KEY"], $map["LLM_API_KEY"], $map["OPENAI_API_KEY"], $map["ANTHROPIC_API_KEY"]) |
+        Where-Object { -not (Test-Placeholder $_) } | Select-Object -First 1
+    $masked = if (-not $key) { "(missing)" }
+    elseif ($key.Length -gt 8) { $key.Substring(0, 4) + "..." + $key.Substring($key.Length - 4) }
+    else { "(set)" }
+    if ($did) {
+        $mShow = if ($model) { $model } else { "(missing)" }
+        Write-Host "Saved to .env:  provider=$provider  model=$mShow  key=$masked" -ForegroundColor Green
+        Show-EnvTip; Write-Host ""
+    }
+    if ((-not $model) -or (-not $key)) {
+        Write-Warning "Config incomplete (model or API key missing) - EVA may not reach a model. Run `eva setup` to finish."
+    }
 }
 
 $script:EnvFull = Join-Path $PSScriptRoot ".env"
@@ -322,6 +361,7 @@ switch ($Command) {
         }
         Write-Host "Removed eva from PATH and tab-completion from the profile (open a new terminal)."
     }
+    "setup" { Invoke-EvaOnboarding -Force }
     "status" { Invoke-Eva @("status") }
     "rollback" { Invoke-Eva (@("rollback") + $Rest) }
     "unlock" { Invoke-Eva @("unlock") }
@@ -408,6 +448,7 @@ Usage: .\run.ps1 <command> [args]   (or, after `install`, simply:  eva <command>
 
 Getting started:
   install               One-time setup: `eva` on PATH + tab-completion (+ optional build)
+  setup                 (Re)configure .env: provider, model, API key (Enter keeps current)
   eva                   Start chatting - bare `eva` opens a work session (default)
   help                  Show this overview (in chat, type /help instead)
 

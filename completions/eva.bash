@@ -6,7 +6,7 @@ _eva_complete() {
   # Only complete the first word (the sub-command); leave task text / flags free.
   if [ "${COMP_CWORD:-1}" -ne 1 ]; then return 0; fi
   local cur="${COMP_WORDS[COMP_CWORD]}"
-  local cmds="build install uninstall status work improve review evolve rollback unlock reseed paste shell fix-perms help"
+  local cmds="build install uninstall setup status work improve review evolve rollback unlock reseed paste shell fix-perms help"
   COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
 }
 # zsh can drive bash-style completers via bashcompinit.

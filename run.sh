@@ -145,29 +145,39 @@ eva_env_tip() {
 }
 
 eva_onboarding() {
-  [ "${EVA_NO_SETUP:-}" = "1" ] && return 0
-  local fresh=0 did=0 provider ans choice m e k
+  local force="${1:-}"
+  [ "${EVA_NO_SETUP:-}" = "1" ] && [ "$force" != "force" ] && return 0
+  local fresh=0 did=0 provider ans choice m e k hint
   [ -f .env ] || fresh=1
   if [ "$fresh" = "1" ]; then
     echo
     echo "I don't see a .env config yet."
     printf "Shall I set up EVA with you now? [Y/n] "
     read -r ans </dev/tty || ans=""
-    case "$ans" in n|N|no|NO) echo "Skipping setup - EVA may not reach a model without credentials." >&2; return 0 ;; esac
+    case "$ans" in n|N|no|NO) echo "Skipping setup - EVA may not reach a model without credentials. Run \`eva setup\` any time." >&2; return 0 ;; esac
     echo "# EVA configuration (created by run.sh setup)" > .env
     did=1
+  elif [ "$force" = "force" ]; then
+    echo
+    echo "Reconfiguring .env - press Enter at any prompt to keep the current value."
   fi
 
   provider="$(read_env_val EVA_PROVIDER)"
-  if [ "$fresh" = "1" ] || [ -z "$provider" ]; then
+  if [ "$fresh" = "1" ] || [ "$force" = "force" ] || [ -z "$provider" ]; then
     echo
     echo "Which model provider should EVA use?"
     echo "  [1] OpenAI-compatible  (OpenAI / Azure / Ollama / LM Studio / vLLM / OpenRouter)"
     echo "  [2] Anthropic Claude   (Messages API: native tools + prompt caching)"
     echo "  [3] Offline 'fake'     (no API key; smoke tests / dry runs)"
-    printf "Choose [1/2/3] (default 1): "
+    if [ -z "$provider" ]; then hint="Choose [1/2/3] (default 1): "; else hint="Choose [1/2/3] (Enter keeps '$provider'): "; fi
+    printf "%s" "$hint"
     read -r choice </dev/tty || choice=""
-    case "$choice" in 2) provider="anthropic" ;; 3) provider="fake" ;; *) provider="openai_chat" ;; esac
+    case "$choice" in
+      1) provider="openai_chat" ;;
+      2) provider="anthropic" ;;
+      3) provider="fake" ;;
+      *) [ -z "$provider" ] && provider="openai_chat" ;;
+    esac
     set_env_var EVA_PROVIDER "$provider"; did=1
   fi
 
@@ -176,8 +186,10 @@ eva_onboarding() {
     return 0
   fi
 
+  local cur_m cur_e key_set
   if [ "$provider" = "anthropic" ]; then
-    if is_placeholder "$(read_env_val EVA_MODEL)" && is_placeholder "$(read_env_val LLM_MODEL)"; then
+    cur_m="$(read_env_val EVA_MODEL)"; is_placeholder "$cur_m" && cur_m="$(read_env_val LLM_MODEL)"
+    if [ "$force" = "force" ] || is_placeholder "$cur_m"; then
       echo
       echo "Which Claude model?"
       echo "  [1] claude-opus-4-8    (frontier; long-running agents & coding)"
@@ -185,38 +197,70 @@ eva_onboarding() {
       echo "  [3] claude-sonnet-4-6  (best speed / intelligence balance)"
       echo "  [4] claude-haiku-4-5   (fastest, near-frontier)"
       echo "  [5] other              (type a custom model id)"
-      printf "Choose [1-5] (default 3): "
+      if is_placeholder "$cur_m"; then hint="Choose [1-5] (default 3): "; else hint="Choose [1-5] (Enter keeps '$cur_m'): "; fi
+      printf "%s" "$hint"
       read -r mc </dev/tty || mc=""
       case "$mc" in
         1) m="claude-opus-4-8" ;;
         2) m="claude-opus-4-6" ;;
+        3) m="claude-sonnet-4-6" ;;
         4) m="claude-haiku-4-5" ;;
         5) printf "Model id: "; read -r m </dev/tty || m="" ;;
-        *) m="claude-sonnet-4-6" ;;
+        *) if is_placeholder "$cur_m"; then m="claude-sonnet-4-6"; else m=""; fi ;;
       esac
       [ -n "$m" ] && { set_env_var EVA_MODEL "$m"; did=1; }
     fi
-    if is_placeholder "$(read_env_val EVA_API_KEY)" && is_placeholder "$(read_env_val ANTHROPIC_API_KEY)"; then
-      k="$(read_secret 'Anthropic API key (sk-ant-...) [hidden]')"
+    key_set=1
+    is_placeholder "$(read_env_val EVA_API_KEY)" && is_placeholder "$(read_env_val ANTHROPIC_API_KEY)" && key_set=0
+    if [ "$force" = "force" ] || [ "$key_set" = "0" ]; then
+      hint="Anthropic API key (sk-ant-...) [hidden]"
+      [ "$key_set" = "1" ] && hint="$hint (Enter keeps current)"
+      k="$(read_secret "$hint")"
       [ -n "$k" ] && { set_env_var EVA_API_KEY "$k"; did=1; }
     fi
   elif [ "$provider" = "openai_chat" ]; then
-    if is_placeholder "$(read_env_val EVA_ENDPOINT)" && is_placeholder "$(read_env_val LLM_ENDPOINT)"; then
-      printf "Chat Completions endpoint (Enter for https://api.openai.com/v1/chat/completions): "
-      read -r e </dev/tty || e=""; [ -z "$e" ] && e="https://api.openai.com/v1/chat/completions"
+    cur_e="$(read_env_val EVA_ENDPOINT)"; is_placeholder "$cur_e" && cur_e="$(read_env_val LLM_ENDPOINT)"
+    if [ "$force" = "force" ] || is_placeholder "$cur_e"; then
+      is_placeholder "$cur_e" && cur_e="https://api.openai.com/v1/chat/completions"
+      printf "Chat Completions endpoint (Enter for %s): " "$cur_e"
+      read -r e </dev/tty || e=""; [ -z "$e" ] && e="$cur_e"
       set_env_var EVA_ENDPOINT "$e"; did=1
     fi
-    if is_placeholder "$(read_env_val EVA_MODEL)" && is_placeholder "$(read_env_val LLM_MODEL)"; then
-      printf "Model name (e.g. gpt-5.5, llama3.1): "
+    cur_m="$(read_env_val EVA_MODEL)"; is_placeholder "$cur_m" && cur_m="$(read_env_val LLM_MODEL)"
+    if [ "$force" = "force" ] || is_placeholder "$cur_m"; then
+      if is_placeholder "$cur_m"; then hint="Model name (e.g. gpt-5.5, llama3.1): "; else hint="Model name (Enter keeps '$cur_m'): "; fi
+      printf "%s" "$hint"
       read -r m </dev/tty || m=""; [ -n "$m" ] && { set_env_var EVA_MODEL "$m"; did=1; }
     fi
-    if is_placeholder "$(read_env_val EVA_API_KEY)" && is_placeholder "$(read_env_val LLM_API_KEY)" && is_placeholder "$(read_env_val OPENAI_API_KEY)"; then
-      k="$(read_secret "API key [hidden] (type 'ollama' for a local server)")"
+    key_set=1
+    is_placeholder "$(read_env_val EVA_API_KEY)" && is_placeholder "$(read_env_val LLM_API_KEY)" && is_placeholder "$(read_env_val OPENAI_API_KEY)" && key_set=0
+    if [ "$force" = "force" ] || [ "$key_set" = "0" ]; then
+      hint="API key [hidden] (type 'ollama' for a local server)"
+      [ "$key_set" = "1" ] && hint="$hint (Enter keeps current)"
+      k="$(read_secret "$hint")"
       [ -n "$k" ] && { set_env_var EVA_API_KEY "$k"; did=1; }
     fi
   fi
 
-  [ "$did" = "1" ] && { echo "Saved to .env - starting EVA..."; eva_env_tip; echo; }
+  # Recap what is configured now (key masked) and flag anything still missing, so a
+  # skipped prompt fails HERE with a hint instead of later with a cryptic HTTP error.
+  local model="" key="" masked v
+  for v in "$(read_env_val EVA_MODEL)" "$(read_env_val LLM_MODEL)"; do
+    if ! is_placeholder "$v"; then model="$v"; break; fi
+  done
+  for v in "$(read_env_val EVA_API_KEY)" "$(read_env_val LLM_API_KEY)" "$(read_env_val OPENAI_API_KEY)" "$(read_env_val ANTHROPIC_API_KEY)"; do
+    if ! is_placeholder "$v"; then key="$v"; break; fi
+  done
+  if [ -z "$key" ]; then masked="(missing)"
+  elif [ "${#key}" -gt 8 ]; then masked="${key:0:4}...${key: -4}"
+  else masked="(set)"; fi
+  if [ "$did" = "1" ]; then
+    echo "Saved to .env:  provider=$provider  model=${model:-(missing)}  key=$masked"
+    eva_env_tip; echo
+  fi
+  if [ -z "$model" ] || [ -z "$key" ]; then
+    echo "WARNING: config incomplete (model or API key missing) - EVA may not reach a model. Run \`eva setup\` to finish." >&2
+  fi
   return 0
 }
 
@@ -281,6 +325,7 @@ case "$cmd" in
       echo "Removed eva block from $rc (open a new terminal)."
     fi
     ;;
+  setup)    eva_onboarding force ;;
   status)   eva status ;;
   rollback) eva rollback "$@" ;;
   unlock)   eva unlock ;;
@@ -347,6 +392,7 @@ Usage: ./run.sh <command> [args]   (or, after `install`, simply:  eva <command> 
 
 Getting started:
   install               One-time setup: `eva` on PATH + tab-completion (+ optional build)
+  setup                 (Re)configure .env: provider, model, API key (Enter keeps current)
   eva                   Start chatting - bare `eva` opens a work session (default)
   help                  Show this overview (in chat, type /help instead)
 

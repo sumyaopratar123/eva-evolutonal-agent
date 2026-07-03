@@ -5,7 +5,7 @@
 Register-ArgumentCompleter -Native -CommandName eva -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
     $cmds = @(
-        'build', 'install', 'uninstall', 'status', 'work', 'improve', 'review',
+        'build', 'install', 'uninstall', 'setup', 'status', 'work', 'improve', 'review',
         'evolve', 'rollback', 'unlock', 'reseed', 'paste', 'shell', 'fix-perms', 'help'
     )
     # Only suggest the sub-command (first argument); leave task text / flags free.
