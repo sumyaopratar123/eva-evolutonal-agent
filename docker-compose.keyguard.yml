@@ -39,6 +39,11 @@ services:
     volumes:
       - ./proxy:/proxy:ro   # host infrastructure; NOT mounted into EVA's container
 
+    # Same host alias as the eva service, so a local model on the host
+    # (Ollama / LM Studio via host.docker.internal) also works behind key-guard.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     environment:
       PYTHONUNBUFFERED: "1"
       # The sidecar resolves provider/endpoint the same way EVA's adapter factory
