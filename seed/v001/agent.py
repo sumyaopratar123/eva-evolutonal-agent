@@ -664,6 +664,37 @@ def _cmd_resume(state, arg, view, mode, interactive):
     view.notice(f"switched to work session {target} ({len(new.events())} events).")
 
 
+def _pick_session(mode: str, task: str):
+    """Pick the session for this run. work is MULTI-session: the task string may be
+    `--list` (list + return), `resume` (most recent) or `resume <id>`. Other modes
+    are single + mode-keyed. Returns (session, session_id, want_resume, task) - or
+    None when the task was a pure listing command (nothing to run)."""
+    if mode != "work":
+        want_resume = (task or "").strip().lower() == "resume"
+        return SessionStore(STATE / f"session.{mode}.jsonl"), None, want_resume, task
+
+    t = (task or "").strip()
+    head = t.split()[0].lower() if t else ""
+    if head in {"--list", "list", "sessions"}:
+        _print_work_sessions()
+        return None
+    if head == "resume":
+        parts = t.split()
+        target = parts[1] if len(parts) > 1 else _read_latest_work()
+        if target and (_work_dir(target) / "events.jsonl").exists():
+            session_id, want_resume = target, True
+        else:
+            miss = f" '{parts[1]}'" if len(parts) > 1 else ""
+            print(f"\n(no resumable work session{miss}; starting a new one)")
+            session_id, want_resume = _new_session_id(), False
+        task = ""
+    else:
+        session_id, want_resume = _new_session_id(), False
+    session = SessionStore(_work_dir(session_id) / "events.jsonl")
+    _write_latest_work(session_id)
+    return session, session_id, want_resume, task
+
+
 def run_mode(mode: str, task: str):
     ensure_dirs()
 
@@ -676,33 +707,10 @@ def run_mode(mode: str, task: str):
     runtime = ShellToolRuntime(workspace=WORKSPACE, approval=approval, human=human,
                                releases=RELEASES, state=STATE)
 
-    # Pick the session. work is MULTI-session: the task string may be `--list`
-    # (list + return), `resume` (most recent) or `resume <id>`. Other modes are
-    # single + mode-keyed.
-    if mode == "work":
-        t = (task or "").strip()
-        head = t.split()[0].lower() if t else ""
-        if head in {"--list", "list", "sessions"}:
-            _print_work_sessions()
-            return
-        if head == "resume":
-            parts = t.split()
-            target = parts[1] if len(parts) > 1 else _read_latest_work()
-            if target and (_work_dir(target) / "events.jsonl").exists():
-                session_id, want_resume = target, True
-            else:
-                miss = f" '{parts[1]}'" if len(parts) > 1 else ""
-                print(f"\n(no resumable work session{miss}; starting a new one)")
-                session_id, want_resume = _new_session_id(), False
-            task = ""
-        else:
-            session_id, want_resume = _new_session_id(), False
-        session = SessionStore(_work_dir(session_id) / "events.jsonl")
-        _write_latest_work(session_id)
-    else:
-        session = SessionStore(STATE / f"session.{mode}.jsonl")
-        session_id = None
-        want_resume = (task or "").strip().lower() == "resume"
+    picked = _pick_session(mode, task)
+    if picked is None:
+        return
+    session, session_id, want_resume, task = picked
 
     adapter = make_adapter()
     identity = adapter.identity() if hasattr(adapter, "identity") else {}
@@ -816,6 +824,10 @@ def run_mode(mode: str, task: str):
     # An interactive resume should let the human type first (no auto-run).
     needs_user_input_first = resumed and interactive
 
+    # `outcome` must survive an early break (e.g. an empty reply at the first
+    # resume prompt runs no loop at all) - the post-loop cleanup reads it.
+    outcome = None
+
     while True:
         # On an interactive RESUME there is no new task yet: let the human read the
         # replay and type the next message BEFORE EVA runs, instead of auto-replying.
@@ -857,9 +869,10 @@ def run_mode(mode: str, task: str):
                 break
             continue
 
-        if not interactive or outcome == "finish":
-            if not interactive:
-                break
+        if not interactive:
+            break
+        # Interactive: even after a `finish` the human gets the next word - the
+        # conversation continues until they leave (empty reply / exit).
         reply = _prompt_user(view, commands, sticky=(mode == "improve"))
         if not reply:
             break

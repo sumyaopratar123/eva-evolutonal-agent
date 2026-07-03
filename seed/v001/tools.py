@@ -501,47 +501,14 @@ class ShellToolRuntime:
                 pass
 
     def execute(self, call: ToolCall, mode: str) -> ToolObservation:
-        if call.name == "finish":
-            summary = str(call.arguments.get("summary", "") or "Finished.")
-            return ToolObservation(call.id, call.name, summary)
+        handler = self._HANDLERS.get(call.name)
+        if handler is None:
+            return ToolObservation(call.id, call.name, f"Unknown tool: {call.name}")
+        return handler(self, call, mode)
 
-        if call.name == "shell":
-            return self._run_shell(call, mode)
-
-        if call.name == "read_file":
-            return self._read_file(call)
-
-        if call.name == "write_file":
-            return self._write_file(call, mode)
-
-        if call.name == "replace_in_file":
-            return self._replace_in_file(call, mode)
-
-        if call.name == "apply_patch":
-            return self._apply_patch(call, mode)
-
-        if call.name == "fetch_url":
-            return self._fetch_url(call)
-
-        if call.name == "web_search":
-            return self._web_search(call)
-
-        if call.name == "make_candidate":
-            return self._make_candidate(call, mode)
-
-        if call.name == "run_tests":
-            return self._run_tests(call, mode)
-
-        if call.name == "note_evolution_need":
-            return self._note_evolution_need(call)
-
-        if call.name == "inspect_self":
-            return self._inspect_self(call)
-
-        if call.name == "request_promotion":
-            return self._request_promotion(call, mode)
-
-        return ToolObservation(call.id, call.name, f"Unknown tool: {call.name}")
+    def _finish(self, call: ToolCall, mode: str) -> ToolObservation:
+        summary = str(call.arguments.get("summary", "") or "Finished.")
+        return ToolObservation(call.id, call.name, summary)
 
     def _run_shell(self, call: ToolCall, mode: str) -> ToolObservation:
         cmd = str(call.arguments.get("cmd", "") or "")
@@ -626,7 +593,7 @@ class ShellToolRuntime:
         return ToolObservation(call.id, call.name,
                                f"Wrote {len(content)} chars to {target}")
 
-    def _read_file(self, call: ToolCall) -> ToolObservation:
+    def _read_file(self, call: ToolCall, mode: str) -> ToolObservation:
         raw = str(call.arguments.get("path", "")).strip()
         if not raw:
             return ToolObservation(call.id, call.name, "Denied: empty path.")
@@ -741,7 +708,7 @@ class ShellToolRuntime:
         return ToolObservation(call.id, call.name,
                                f"Applied {len(edits)} edits to {target}")
 
-    def _fetch_url(self, call: ToolCall) -> ToolObservation:
+    def _fetch_url(self, call: ToolCall, mode: str) -> ToolObservation:
         # Generic research capability: read a web page as text. Network egress is allowed
         # by the sandbox (same channel the model uses); restrict egress at the container
         # level for stricter isolation.
@@ -771,7 +738,7 @@ class ShellToolRuntime:
             text = text[:max_chars] + f"\n...[truncated {len(text) - max_chars} chars; raise max_chars]"
         return ToolObservation(call.id, call.name, f"[{url}]\n{text}")
 
-    def _web_search(self, call: ToolCall) -> ToolObservation:
+    def _web_search(self, call: ToolCall, mode: str) -> ToolObservation:
         query = str(call.arguments.get("query", "") or "").strip()
         if not query:
             return ToolObservation(call.id, call.name, "Denied: empty query.")
@@ -864,7 +831,7 @@ class ShellToolRuntime:
         return ToolObservation(call.id, call.name,
                                f"tests {status} (exit={r.returncode})\n{tail}")
 
-    def _note_evolution_need(self, call: ToolCall) -> ToolObservation:
+    def _note_evolution_need(self, call: ToolCall, mode: str) -> ToolObservation:
         # Presentation/echo only: agent.py owns the friction backlog and the recurrence
         # threshold. This just acknowledges the note (and its stable signature) in the
         # conversation; whether it becomes a skill proposal depends on RECURRENCE, decided
@@ -880,7 +847,7 @@ class ShellToolRuntime:
                                "is fine to just handle now; this is proposed as a real "
                                "skill only if the SAME need recurs.")
 
-    def _inspect_self(self, call: ToolCall) -> ToolObservation:
+    def _inspect_self(self, call: ToolCall, mode: str) -> ToolObservation:
         # Read-only self-knowledge, available in every mode. EVA queries its own
         # anatomy/skills/capabilities on demand instead of being preloaded with them.
         topic = str(call.arguments.get("topic", "") or "overview")
@@ -924,3 +891,22 @@ class ShellToolRuntime:
         return ToolObservation(call.id, call.name,
                                f"Promotion requested for {name}. Finish now; the "
                                "supervisor and kernel will gate it.")
+
+    # Single dispatch table: tool name -> handler. Every handler takes (call, mode)
+    # so permission checks stay a per-handler concern (via policy_for), never
+    # re-decided in the dispatcher. Defined after the handlers so the methods exist.
+    _HANDLERS = {
+        "finish": _finish,
+        "shell": _run_shell,
+        "read_file": _read_file,
+        "write_file": _write_file,
+        "replace_in_file": _replace_in_file,
+        "apply_patch": _apply_patch,
+        "fetch_url": _fetch_url,
+        "web_search": _web_search,
+        "make_candidate": _make_candidate,
+        "run_tests": _run_tests,
+        "note_evolution_need": _note_evolution_need,
+        "inspect_self": _inspect_self,
+        "request_promotion": _request_promotion,
+    }

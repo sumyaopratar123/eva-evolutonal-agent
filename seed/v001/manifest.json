@@ -35,11 +35,11 @@
   },
   "hashes": {
     "supervisor.py": "96a85c57866815bf364ea8750bc616400fb11595ec1ec73ef27d71dfde3592ea",
-    "agent.py": "269e60e9783ced0a8ebe11c51479800e78a5a6ac83aa96eb04610a38dc153bb6",
+    "agent.py": "db52ab596bebfa04eeef17b09b3f48588e4b0a71f36bfe3564ce635ef081d701",
     "tests.py": "12fccc5d861eca3b56bf1316d9223f97b7c88ca44a23f3e04cbe3045654a8fcc",
     "core.py": "c877e3a7733f62cb76a1f8f8c167125d703886a1c6c24607871bc6f361befaea",
     "adapters.py": "0486ab8e95ccc36236fa9844f1e96b6db089a49f7715b47dc94692b99c49f714",
-    "tools.py": "5c41bb8340f4e874bbb3a91dbd18b4670e85aed7088e4c0f243bc568cb55df47",
+    "tools.py": "2c8842c5f70fb92484a30be8f7f5c58af214b1494d0ab288e8a386f3d2bcc299",
     "human.py": "d5ad8aff82bca6f5389d0753b4659e9a64d4e4bbfee57943244e58ca55dd0b04",
     "session.py": "1f44e3b491b22d1b40447804a4440d1e9cb40a0784c1e84ad0862c147ead7f45",
     "self_model.py": "55d5414b69cd5eaccd7ba218b985361aff567f2ff3b01ca6dd4708913804bb59",
