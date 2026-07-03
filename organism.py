@@ -430,7 +430,13 @@ def approve(prompt, auto_yes=False):
     if auto_yes:
         print(prompt + " [auto-yes]")
         return True
-    return input(prompt + " [y/N] ").strip().lower() == "y"
+    try:
+        return input(prompt + " [y/N] ").strip().lower() == "y"
+    except EOFError:
+        # Non-interactive stdin (piped input exhausted): fail closed, like the
+        # agent-side human gate does, instead of crashing mid-promotion.
+        print("(no interactive stdin - declining)")
+        return False
 
 
 def next_version_name():
