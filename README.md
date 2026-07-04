@@ -5,6 +5,7 @@
 <h1 align="center">EVA — <b>E</b>volvable <b>V</b>irtual <b>A</b>gent</h1>
 
 <p align="center">
+  <a href="https://github.com/arturkorb3/eva-evolutional-agent/actions/workflows/ci.yml"><img src="https://github.com/arturkorb3/eva-evolutional-agent/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/status-experimental-orange" alt="status">
   <img src="https://img.shields.io/badge/python-3.12-blue" alt="python">
   <img src="https://img.shields.io/badge/sandbox-Docker-2496ED" alt="sandbox">
