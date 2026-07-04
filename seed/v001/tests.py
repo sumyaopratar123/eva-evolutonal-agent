@@ -2730,6 +2730,21 @@ def check_loop_signal_flags_semantic_near_repeats():
     assert "../releases/v001/agent.py" in t
     assert core._call_targets(core.ToolCall(id="3", name="finish",
                                             arguments={})) == []
+    # directories must NOT count as targets: `cd samedir && <varied work>` names the
+    # same dir every command without re-reading anything (live false positive)
+    t = core._call_targets(core.ToolCall(
+        id="4", name="shell",
+        arguments={"cmd": "cd ../releases/v001 && grep -n foo agent.py"}))
+    assert t == ["agent.py"]
+    assert core._call_targets(core.ToolCall(
+        id="5", name="read_file", arguments={"path": "../releases/v001"})) == []
+
+    # the appended nudge must never be recorded as shell FRICTION (it lands after
+    # 'stderr:' in the observation and would otherwise fake a real error)
+    import agent
+    assert agent.record_shell_friction(
+        "exit=1\nstdout:\nstderr:\n\n[loop signal: access #4 to 'x.py' this turn. "
+        "...]", "work") is None
 
     # end-to-end: 4 varied accesses to the SAME file -> the 4th obs carries the signal
     class _Sess:
@@ -2772,6 +2787,46 @@ def check_loop_signal_flags_semantic_near_repeats():
     assert "loop signal" in seen[3]              # 4th access: nudged
     assert "history_budget" in seen[3] and "x/agent.py" in seen[3]
     assert seen[3].startswith("content")         # still executed, not blocked
+
+
+def check_loop_status_survives_compaction():
+    """The per-observation loop nudge lives inside tool outputs, so compaction would
+    evict exactly the advice that warns about eviction. The compacted view must
+    re-surface flagged targets as a sticky LOOP STATUS line - and stay silent when
+    nothing was flagged."""
+    import context
+    import core
+
+    def tool_ev(cid, out):
+        return core.Event(role="tool", content=out, tool_call_id=cid, name="shell")
+
+    def asst_ev(cid):
+        call = core.ToolCall(id=cid, name="shell", arguments={"cmd": "grep x t.py"})
+        return core.Event(role="assistant", content="looking", tool_calls=[call])
+
+    evs = [core.Event(role="system", content="sys"),
+           core.Event(role="user", content="task")]
+    for i in range(12):
+        evs.append(asst_ev(str(i)))
+        out = "exit=0\nresult " + "x" * 300
+        if i in (5, 6):
+            out += ("\n[loop signal: access #%d to 'a/tests.py' this turn. ...]"
+                    % (i - 1))
+        evs.append(tool_ev(str(i), out))
+
+    view = context.compact(evs, budget=800, keep=4)
+    blob = "\n".join(e.content or "" for e in view
+                     if e.role == "user" and "LOOP STATUS" in (e.content or ""))
+    assert "LOOP STATUS" in blob and "'a/tests.py' x5" in blob
+    assert "history_budget" in blob
+    # merged into the summary event - no extra consecutive user message
+    users = [e for e in view if e.role == "user" and e is not view[1]]
+    assert len(users) == 1 and "Progress so far" in users[0].content
+
+    # without signals: no sticky line at all
+    clean = [e for e in evs if "[loop signal" not in (e.content or "")]
+    view2 = context.compact(clean, budget=800, keep=4)
+    assert all("LOOP STATUS" not in (e.content or "") for e in view2)
 
 
 def _all_checks():

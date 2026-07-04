@@ -36,7 +36,7 @@ class Param:
 
 REGISTRY: dict[str, Param] = {
     "history_budget": Param(
-        "ORGANISM_HISTORY_BUDGET", 96000, 8000, 2_000_000,
+        "ORGANISM_HISTORY_BUDGET", 150000, 8000, 2_000_000,
         "compaction budget in CHARS (~4 chars/token) for the visible history "
         "(agent.py _CompactSession); older events beyond it are summarized"),
     "history_keep": Param(

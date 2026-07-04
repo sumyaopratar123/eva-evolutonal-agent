@@ -535,7 +535,9 @@ def record_shell_friction(observation_text: str, mode: str) -> str | None:
     signature includes a snippet of that error so unrelated failures don't collapse
     into one coarse `shell:exit=1` bucket. Returns the signature if recorded, else None.
     """
-    text = observation_text or ""
+    # The core may append a soft "[loop signal: ...]" nudge to any observation; it
+    # is guidance for the model, not error output, and must never count as friction.
+    text = (observation_text or "").split("\n[loop signal:", 1)[0]
     first = text.splitlines()[0] if text else ""
     if not first.startswith("exit=") or first.strip() == "exit=0":
         return None

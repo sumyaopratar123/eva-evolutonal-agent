@@ -12,6 +12,8 @@ and stays reproducible for tests, resume and audit.
 """
 from __future__ import annotations
 
+import re
+
 from core import Event
 
 
@@ -82,6 +84,32 @@ def summarize_dropped(dropped) -> "str | None":
     return "Progress so far (older steps, condensed):\n" + "\n".join(lines)
 
 
+# Matches the soft loop-detection nudge core.py appends to observations.
+_LOOP_SIG = re.compile(r"\[loop signal: access #(\d+) to '([^']+)'")
+
+
+def _loop_status(dropped) -> "str | None":
+    """Sticky counterpart of the per-observation loop signal: the nudge lives inside
+    tool outputs, so compaction would EVICT exactly the advice that warns about
+    eviction. Re-surface the flagged targets in the condensed view so the warning
+    survives every compaction for the rest of the session."""
+    hits: dict[str, int] = {}
+    for ev in dropped:
+        if ev.role == "tool":
+            for m in _LOOP_SIG.finditer(ev.content or ""):
+                target = m.group(2)
+                hits[target] = max(hits.get(target, 0), int(m.group(1)))
+    if not hits:
+        return None
+    tops = sorted(hits.items(), key=lambda kv: (-kv[1], kv[0]))[:4]
+    listing = ", ".join(f"'{t}' x{n}" for t, n in tops)
+    return ("LOOP STATUS (sticky): repeated accesses to the same files were flagged "
+            f"earlier: {listing}. Those reads DID happen - their outcomes are in the "
+            "progress summary above. Do not re-read them; state what you learned and "
+            "act on it, or raise the visible-history budget via "
+            "set_param('history_budget', ...).")
+
+
 def compact(events, budget: int, keep: int) -> "list[Event]":
     """Send the full log while it fits `budget`; past that send system + first task +
     a condensed summary of the dropped middle + the last `keep` events verbatim."""
@@ -103,6 +131,11 @@ def compact(events, budget: int, keep: int) -> "list[Event]":
 
     view = [system, first_trimmed]
     summary = summarize_dropped(dropped)
+    status = _loop_status(dropped)
+    if status:
+        # merged into ONE user event: consecutive same-role messages upset strict
+        # provider APIs, and the status belongs to the condensed context anyway
+        summary = f"{summary}\n\n{status}" if summary else status
     if summary:
         view.append(Event(role="user", content=summary))
     view.extend(tail)

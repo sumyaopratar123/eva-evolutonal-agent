@@ -196,16 +196,25 @@ _LOOP_SIGNAL = (
 _PATH_TOKEN = re.compile(r"""["']?([~.\w-]*/[\w./*-]+|[\w.-]+\.[A-Za-z]{1,4})["']?""")
 
 
+def _is_file_target(path: str) -> bool:
+    """Only FILE-looking paths count as loop targets (basename has an extension).
+    Directories would false-positive: `cd somedir && <anything>` names the same
+    dir on every command without any of them re-reading the same content."""
+    base = path.rstrip("/").rsplit("/", 1)[-1]
+    return "." in base.lstrip(".")
+
+
 def _call_targets(call: ToolCall) -> "list[str]":
     """Coarse 'what is this call about' extraction: the path argument of read_file,
-    or path-like tokens inside a shell command. Empty for everything else."""
+    or file-like tokens inside a shell command. Empty for everything else."""
     args = call.arguments or {}
     if call.name == "read_file":
         p = str(args.get("path", "") or "").strip()
-        return [p] if p else []
+        return [p] if p and _is_file_target(p) else []
     if call.name == "shell":
         cmd = str(args.get("cmd", "") or "")
-        return sorted({m.group(1) for m in _PATH_TOKEN.finditer(cmd)})
+        return sorted({m.group(1) for m in _PATH_TOKEN.finditer(cmd)
+                       if _is_file_target(m.group(1))})
     return []
 
 
