@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - platform dependent
 _RL_IGNORE_START, _RL_IGNORE_END = "\001", "\002"
 
 _CODES = {
-    "reset": "\x1b[0m", "dim": "\x1b[2m", "bold": "\x1b[1m",
+    "reset": "\x1b[0m", "dim": "\x1b[2m", "bold": "\x1b[1m", "italic": "\x1b[3m",
     "red": "\x1b[31m", "green": "\x1b[32m", "yellow": "\x1b[33m",
     "blue": "\x1b[34m", "magenta": "\x1b[35m", "cyan": "\x1b[36m", "gray": "\x1b[90m",
 }
@@ -649,6 +649,10 @@ class StatusView:
         self._tbl = None
         self._fence = False
         self._said_prefix = False
+        # Reasoning stream (extended thinking / reasoning_content): rendered live as
+        # dim lines under a one-time "thinking" header, closed when the answer starts.
+        self._thinking = False
+        self._tbuf = ""
         # Live elapsed-time spinner for long tool calls (real TTY only).
         self._spin_stop = None
         self._spin_thread = None
@@ -730,6 +734,13 @@ class StatusView:
         a long shell / fetch shows a live elapsed timer instead of a frozen screen."""
         self._start_spinner(name or "running")
 
+    def model_waiting(self) -> None:
+        """Called just before a model call: the gap between sending the prompt and
+        the first streamed token can be long (reasoning models think server-side
+        before the first summary chunk arrives) - show a live elapsed timer instead
+        of a frozen prompt. The first real output stops it."""
+        self._start_spinner("model")
+
     def header(self) -> None:
         self._w(format_header(self.mode, self.identity, self.release, color=self.color))
 
@@ -801,6 +812,7 @@ class StatusView:
     def end_turn(self) -> None:
         """Close the turn with a one-line dim summary - only when there was enough
         activity for a recap to add signal (2+ tool calls), so short turns stay clean."""
+        self._stop_spinner()
         t, self._turn = self._turn, None
         if not t or t["tools"] < 2:
             return
@@ -837,7 +849,103 @@ class StatusView:
                        " (most recent: work resume)",
                        "gray", color=self.color) + "\n")
 
+    def on_think_delta(self, chunk: str) -> None:
+        """Render a fragment of the model's REASONING as it streams in: dim, indented,
+        under a one-time '\u2234 thinking' header. On a real TTY the text flows word
+        by word (typewriter style, soft-wrapped at terminal width, with a tiny
+        adaptive beat so server-side bursts still read as continuous typing). On
+        non-TTY streams (logs, tests) it emits complete soft-wrapped lines, keeping
+        output deterministic. Presentation only - the reasoning is never part of
+        the answer or the event log's say text."""
+        if not chunk:
+            return
+        self._stop_spinner()
+        if not self._thinking:
+            self._thinking = True
+            self._tbuf = ""
+            self._tline = 0
+            self._tstart = time.monotonic()
+            self._w(_paint("  \u2234 thinking", "gray", color=self.color))
+        self._tbuf += chunk
+        width = max(40, _term_width() - 6)
+        if self._tty():
+            # Keep only the trailing partial word buffered; flow the rest.
+            cut = max(self._tbuf.rfind(" "), self._tbuf.rfind("\n"))
+            if cut < 0:
+                return
+            done, self._tbuf = self._tbuf[:cut + 1], self._tbuf[cut + 1:]
+            self._think_flow(done, width)
+            return
+        while True:
+            if "\n" in self._tbuf:
+                nl = self._tbuf.index("\n")
+                if nl <= width:
+                    line, self._tbuf = self._tbuf[:nl], self._tbuf[nl + 1:]
+                else:
+                    line, self._tbuf = self._soft_cut(self._tbuf, width)
+            elif len(self._tbuf) > width:
+                line, self._tbuf = self._soft_cut(self._tbuf, width)
+            else:
+                break
+            if line.strip():
+                self._w(_paint("    " + line, "gray", "italic", color=self.color))
+
+    def _think_flow(self, text: str, width: int) -> None:
+        """Typewriter-emit reasoning words on a TTY: indent fresh lines, soft-wrap
+        at width, paint each word dim italic, and pace with a tiny adaptive beat
+        (bounded, faster for large bursts) so text reads as continuous typing."""
+        words = [w for w in text.replace("\n", " \n ").split(" ") if w]
+        for i, w in enumerate(words):
+            if w == "\n":
+                if self._tline:
+                    self._raw("\n")
+                    self._tline = 0
+                continue
+            if self._tline and self._tline + 1 + len(w) > width:
+                self._raw("\n")
+                self._tline = 0
+            if self._tline == 0:
+                self._raw("    " + _paint(w, "gray", "italic", color=self.color))
+                self._tline = len(w)
+            else:
+                self._raw(_paint(" " + w, "gray", "italic", color=self.color))
+                self._tline += 1 + len(w)
+            try:
+                time.sleep(min(0.05, 2.5 / max(1, len(words) - i)))
+            except Exception:
+                pass
+
+    @staticmethod
+    def _soft_cut(text: str, width: int) -> "tuple[str, str]":
+        """Split text at the last space within width (hard cut if none)."""
+        cut = text.rfind(" ", 0, width + 1)
+        if cut <= 0:
+            cut = width
+        return text[:cut], text[cut:].lstrip(" ")
+
+    def _end_thinking(self) -> None:
+        """Close an open reasoning stream (flush the partial last line, note how long
+        the model thought) before the answer, a tool call or an error takes over."""
+        if not self._thinking:
+            return
+        if self._tty():
+            if self._tbuf.strip():
+                self._think_flow(self._tbuf + " ", max(40, _term_width() - 6))
+            if getattr(self, "_tline", 0):
+                self._raw("\n")
+                self._tline = 0
+        elif self._tbuf.strip():
+            self._w(_paint("    " + self._tbuf, "gray", "italic", color=self.color))
+        secs = time.monotonic() - getattr(self, "_tstart", time.monotonic())
+        if secs >= 1:
+            self._w(_paint(f"  \u2234 thought for {secs:.0f}s", "gray",
+                           color=self.color))
+        self._tbuf = ""
+        self._thinking = False
+
     def say(self, text: str) -> None:
+        self._stop_spinner()
+        self._end_thinking()
         # Reconcile the end of a streamed turn: flush any buffered partial line, a held
         # table candidate and an open table, then reset.
         if self._streaming:
@@ -865,6 +973,8 @@ class StatusView:
         NOT streamed here; only free text."""
         if not chunk:
             return
+        self._stop_spinner()
+        self._end_thinking()
         if not self._streaming:
             self._streaming = True
             self._sbuf = ""
@@ -918,8 +1028,27 @@ class StatusView:
             self._said_prefix = True
         if self._fence or _is_fence(line):
             self._w(_paint(line, "dim", color=self.color))
+            return
+        rendered = render_markdown_line(line, color=self.color)
+        if self._tty() and rendered.strip():
+            self._flow_words(rendered)
         else:
-            self._w(render_markdown_line(line, color=self.color))
+            self._w(rendered)
+
+    def _flow_words(self, rendered: str) -> None:
+        """Typewriter-emit an already-rendered answer line on a TTY: words appear
+        one by one with a tiny bounded beat (at most ~0.5s per line, faster for
+        long lines) so streamed prose reads as continuous typing instead of line
+        drops. Split on spaces only - ANSI codes never contain spaces, so styling
+        survives intact."""
+        words = rendered.split(" ")
+        for i, w in enumerate(words):
+            self._raw(w if i == 0 else " " + w)
+            try:
+                time.sleep(min(0.04, 0.5 / max(1, len(words) - i)))
+            except Exception:
+                pass
+        self._raw("\n")
 
     def _flush_table(self) -> None:
         if self._tbl is None:
@@ -936,6 +1065,8 @@ class StatusView:
         self._tbl = None
 
     def tool_call(self, call) -> None:
+        self._stop_spinner()
+        self._end_thinking()
         if self._turn is not None and getattr(call, "name", "") != "finish":
             self._turn["tools"] += 1
         self._w(format_tool_call(call, color=self.color, full=self.full))
@@ -956,6 +1087,7 @@ class StatusView:
 
     def error(self, stage: str, exc) -> None:
         self._stop_spinner()
+        self._end_thinking()
         if self._streaming:
             self._raw("\n")
             self._streaming = False

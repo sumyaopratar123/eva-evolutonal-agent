@@ -1,0 +1,23 @@
+{
+  "milestones": {
+    "9":    ["INPUT", "Task: evolve a Playwright browser tool - install, persist deps, verify, gate"],
+    "917":  ["STEP 1", "pip install playwright (user-site -> persists across containers)"],
+    "1164": ["STEP 2", "Headless Chromium downloaded into the persistent cache"],
+    "1519": ["STEP 3", "24 native libs apt-installed in the FREE sandbox"],
+    "1849": ["STEP 4", "Libs persisted to state/system-deps.txt - reinstalled at every boot"],
+    "2008": ["STEP 5", "'browser' tool written into the candidate's tools.py"],
+    "2341": ["HICCUP", "Ratchet catches a broken check - EVA debugs its own test suite (time-lapse)"],
+    "3232": ["STEP 6", "All 122 checks pass - candidate is green"],
+    "3346": ["VERIFY", "Live proof: candidate's browser tool renders example.com"],
+    "3394": ["GATE", "Promotion requested - supervisor & kernel gates take over"],
+    "3425": ["GATE", "Supervisor gate: ratchet 122 checks, smoke, dry-runs, 2 qualification rounds"],
+    "3438": ["PROMOTED", "EVA is now v002 - browser automation is a durable skill"]
+  },
+  "fast": [
+    [10, 917, 3.0],
+    [917, 1519, 2.0],
+    [1519, 1849, 2.0],
+    [2008, 2341, 2.0],
+    [2342, 3232, 3.0]
+  ]
+}

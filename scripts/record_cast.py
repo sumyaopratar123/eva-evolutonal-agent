@@ -25,10 +25,14 @@ import termios
 import time
 
 COLS, ROWS = 110, 32
-TIMEOUT = 1500  # hard cap, seconds
-CAST = "/eva/workspace/improve.cast"
-TASK = ("Give yourself a soul: create soul.md with one sentence about who you are, "
-        "protect it with a new ratchet check, run the tests and request promotion.")
+# Overridable via env so different demos can be recorded without editing this file.
+TIMEOUT = int(os.environ.get("EVA_CAST_TIMEOUT", "1500"))  # hard cap, seconds
+CAST = os.environ.get("EVA_CAST_OUT", "/eva/workspace/improve.cast")
+TASK = os.environ.get("EVA_CAST_TASK") or (
+    "Give yourself a soul: create soul.md with one sentence about who you are, "
+    "protect it with a new ratchet check, run the tests and request promotion.")
+TITLE = os.environ.get("EVA_CAST_TITLE",
+                       "EVA - improve session (self-modification with gated promotion)")
 
 pid, fd = pty.fork()
 if pid == 0:
@@ -113,7 +117,7 @@ except ChildProcessError:
 
 header = {"version": 2, "width": COLS, "height": ROWS,
           "timestamp": int(time.time()),
-          "title": "EVA - improve session (self-modification with gated promotion)",
+          "title": TITLE,
           "env": {"TERM": "xterm-256color", "SHELL": "/bin/sh"}}
 with open(CAST, "w", encoding="utf-8") as f:
     f.write(json.dumps(header) + "\n")

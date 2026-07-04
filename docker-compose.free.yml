@@ -30,3 +30,10 @@ services:
       - SETFCAP
     environment:
       EVA_SANDBOX: "free"
+    volumes:
+      # Persist the apt caches so the kernel's boot provisioning (re-installing the
+      # packages EVA listed in state/system-deps.txt) is seconds instead of a full
+      # re-download every session. Debs + package lists survive; the installed
+      # rootfs stays ephemeral by design.
+      - ./data/syscache/apt-archives:/var/cache/apt/archives
+      - ./data/syscache/apt-lists:/var/lib/apt/lists

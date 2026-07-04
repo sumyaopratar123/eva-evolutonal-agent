@@ -195,7 +195,7 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
     <div class="node n-red"><b>fail / rollback</b><small>candidate discarded · step back anytime</small></div>
   </div>
   <ul>
-    <li><b><code>organism.py</code></b> — the kernel: ~600 lines, baked into the image. It seeds the
+    <li><b><code>organism.py</code></b> — the kernel: ~900 lines, baked into the image. It seeds the
       genome (verifying SHA-256 manifest hashes), runs the final gate, keeps the ledger.</li>
     <li><b><code>seed/v001/</code></b> — the genome: real, reviewable, hash-pinned Python files.</li>
     <li><b><code>runtime/releases/vN/</code></b> — the live, evolvable generations. EVA builds a
@@ -231,6 +231,15 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
   it with a new ratchet check, passes 87/87 checks and both gates — and is promoted to
   <b>v002</b>. Milestones are marked on the timeline (jump with <kbd>[</kbd>/<kbd>]</kbd>):</p>
   <div id="improve-player" class="gif" style="padding:0;overflow:hidden"></div>
+
+  <p style="margin-top:1.2rem"><b>Live skill evolution</b> (real, unedited session — long waits
+  compressed): EVA is asked to <em>evolve a browser-automation skill</em>. In one gated cycle it
+  installs Playwright + headless Chromium, apt-installs 24 native libraries in the FREE sandbox
+  and <b>persists them</b> to the system-deps manifest, writes a new <code>browser</code> tool
+  into a candidate, hits a real ratchet failure and debugs its own test suite, proves the tool
+  live against example.com, passes 122 checks and both gates — and is promoted. The new skill
+  survives the throwaway container:</p>
+  <div id="browser-player" class="gif" style="padding:0;overflow:hidden"></div>
 
   <h3>Grown from friction, not designed up front</h3>
   <p>Where does the pressure to evolve come from? From the <b>environment</b> — real usage.
@@ -286,9 +295,15 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
   self-model is <b>generated from the live code on every run</b>: anatomy from the release
   manifest, skills from its tool definitions, guaranteed capabilities from its own test suite,
   its security boundaries from the mode-policy table. Ask it (<code>inspect_self</code> —
-  overview · anatomy · skills · capabilities · policy · sandbox · model) and it answers from
-  the release it is <em>actually running</em>, down to which sandbox and model it is on right
-  now.</p>
+  overview · anatomy · skills · capabilities · policy · sandbox · model · vitals) and it
+  answers from the release it is <em>actually running</em>, down to which sandbox and model it
+  is on right now.</p>
+  <p>Beyond anatomy, EVA also knows <b>how it has been doing</b>: <em>vitals</em> aggregate
+  friction pressure, evolution outcomes and turn feedback; a <em>lessons journal</em> keeps
+  durable insights; and a <b>cross-session episodic memory</b> digests every session into a
+  compact episode — recalled on demand (<code>recall</code> tool) and auto-surfaced when a new
+  task clearly relates to past work. All of it plain JSONL under <code>./data/state</code>,
+  LLM-free and inspectable.</p>
   <div class="note">The consequence is elegant: a promotion updates EVA's self-image
   automatically, and a behaviour shipped without a pinned check is invisible to EVA's future
   self <em>and</em> unprotected by the ratchet — so self-knowledge and reality cannot drift
@@ -302,9 +317,9 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
   <h2><span class="hash">#</span>Modes &amp; everyday use</h2>
   <table>
     <tr><th>Command</th><th>What it does</th></tr>
-    <tr><td><code>work [task]</code></td><td>Useful work in <code>workspace/</code>. Can inspect itself, but <b>never</b> edits its own code.</td></tr>
-    <tr><td><code>review [task]</code></td><td>Read-only inspection — no writes, no evolution.</td></tr>
-    <tr><td><code>improve [task]</code></td><td><b>Directed</b> self-change — builds a gated candidate that implements <em>your</em> task.</td></tr>
+    <tr><td><code>work</code></td><td>Useful work in <code>workspace/</code>. Can inspect itself, but <b>never</b> edits its own code. You describe the task in the chat.</td></tr>
+    <tr><td><code>review</code></td><td>Read-only inspection — no writes, no evolution.</td></tr>
+    <tr><td><code>improve</code></td><td><b>Directed</b> self-change — builds a gated candidate that implements <em>your</em> task (given in the chat).</td></tr>
     <tr><td><code>evolve [N]</code></td><td><b>Autonomous</b> self-change — EVA picks the improvement, announces it, implements N rounds.</td></tr>
     <tr><td><code>&lt;mode&gt; resume</code></td><td>Continue your previous session — each mode keeps its own; <code>work</code> keeps many.</td></tr>
     <tr><td><code>status</code> / <code>rollback</code></td><td>Show the active/last-good release · roll back along the ledger.</td></tr>
@@ -340,8 +355,8 @@ eva                    # first run: a short wizard sets up provider → model �
   provider directly. Pick the adapter explicitly in <code>.env</code>:</p>
   <table>
     <tr><th><code>EVA_PROVIDER</code></th><th>Backend</th></tr>
-    <tr><td><code>openai_chat</code></td><td>Any OpenAI-compatible Chat Completions endpoint (OpenAI, Azure, Ollama, LM Studio, vLLM, OpenRouter). Native tool calling or a portable JSON-text fallback (<code>EVA_TOOL_MODE</code>).</td></tr>
-    <tr><td><code>anthropic</code></td><td>Anthropic Claude (Messages API) with native tool use and prompt caching.</td></tr>
+    <tr><td><code>openai_chat</code></td><td>Any OpenAI-compatible Chat Completions endpoint (OpenAI, Azure, Ollama, LM Studio, vLLM, OpenRouter). Native tool calling or a portable JSON-text fallback (<code>EVA_TOOL_MODE</code>). Reasoning models' <code>reasoning_content</code> streams live into the TUI.</td></tr>
+    <tr><td><code>anthropic</code></td><td>Anthropic Claude (Messages API) with native tool use and prompt caching. Optional extended thinking (<code>EVA_THINKING=1</code>, adaptive on current models; <code>=budget</code> for &le;&nbsp;4.5 models) streams the model's reasoning into the TUI.</td></tr>
     <tr><td><code>fake</code></td><td>Offline, deterministic — for smoke tests / dry runs (no key).</td></tr>
   </table>
 
@@ -375,7 +390,12 @@ eva                    # first run: a short wizard sets up provider → model �
       sandbox (<code>-Free</code> / <code>--free</code>) layers a writable rootfs + root +
       <code>apt</code> — bigger blast radius, still contained and ephemeral. EVA is told its
       sandbox tier (<code>EVA_SANDBOX</code>), so in safe mode it recognises a system-library
-      need as an <em>image need</em> and stops instead of thrashing <code>apt</code>.</p></div>
+      need as an <em>image need</em> and stops instead of thrashing <code>apt</code>.
+      Free-sandbox skills <b>survive the throwaway container</b>: packages EVA records in
+      <code>state/system-deps.txt</code> are re-installed by the kernel at every free boot
+      (host-cached, seconds after the first run; <code>EVA_SYSTEM_DEPS=0</code> opts out) —
+      while the kernel keeps its own process environment clean of anything EVA can
+      write.</p></div>
     <div class="card r"><span class="ic">🔑</span><h4>Key-guard sidecar <em>(on by default)</em></h4>
       <p>Without the guard the LLM API key sits in EVA's environment — readable by an agent
       with a shell. With key-guard (default; <code>EVA_KEYGUARD=0</code> opts out), a tiny
@@ -413,7 +433,8 @@ eva                    # first run: a short wizard sets up provider → model �
     <tr><td><code>tools.py</code></td><td>Canonical tools + sandboxed runtime + the explicit <b>mode-policy table</b> (who may write/shell/promote).</td></tr>
     <tr><td><code>human.py</code></td><td><code>HumanInterface</code> + <code>ApprovalPolicy</code> (approve <code>[y/N/f]</code>) + host clipboard bridge.</td></tr>
     <tr><td><code>session.py</code></td><td>Append-only event log = the <b>source of truth</b>; image blobs kept out of the log.</td></tr>
-    <tr><td><code>context.py</code></td><td>Deterministic, LLM-free <b>compaction</b> — full log while it fits, then a condensed view.</td></tr>
+    <tr><td><code>context.py</code></td><td>Deterministic, LLM-free <b>compaction</b> — full log while it fits; the condensed view preserves older user constraints verbatim, pins milestones (candidates, test results) and is marked as memory, not instruction.</td></tr>
+    <tr><td><code>memory.py</code></td><td><b>Cross-session episodic memory</b>: each session ends as a compact digest (task, outcome, files, lessons, tags); <code>recall</code> searches it, related episodes auto-surface on new tasks.</td></tr>
     <tr><td><code>self_model.py</code></td><td><b>Generated</b> self-knowledge: anatomy/skills/capabilities/policy read from the live release on demand.</td></tr>
     <tr><td><code>tui.py</code></td><td>The status view — live, human-readable "what is EVA doing now", with Markdown rendering.</td></tr>
     <tr><td><code>agent.py</code></td><td>Wiring + the CLI/chat loop; the four modes; friction backlog and improve-pivot.</td></tr>
@@ -433,9 +454,12 @@ eva                    # first run: a short wizard sets up provider → model �
     <li>The standing gate runs offline: golden traces replay <em>recorded</em> provider
       responses; a live check exists but is opt-in — a provider silently changing its wire
       format won't fail the gate until you run it.</li>
-    <li>The ratchet counts <em>executed</em> checks, but still can't prove a test body wasn't
-      weakened in other ways.</li>
-    <li>Context compaction is deterministic and rudimentary.</li>
+    <li>The ratchet counts <em>executed</em> checks; a kernel <b>substance floor</b> (AST)
+      rejects hollow check bodies and the constitutional checks are pinned by body hash — but
+      the <em>semantic quality</em> of an arbitrary check still can't be proven
+      mechanically.</li>
+    <li>Context compaction is deterministic and heuristic: it preserves constraints and
+      milestones, but budgets by characters, not tokens, and understands no semantics.</li>
     <li>Network egress is open by default (see residual risk above).</li>
   </ul>
 </section>
@@ -451,6 +475,10 @@ eva                    # first run: a short wizard sets up provider → model �
   AsciinemaPlayer.create('improve.cast', document.getElementById('improve-player'), {
     theme: 'dracula', fit: 'width', idleTimeLimit: 5, speed: 1.25,
     poster: 'npt:0:05', controls: true
+  });
+  AsciinemaPlayer.create('browser.cast', document.getElementById('browser-player'), {
+    theme: 'dracula', fit: 'width', idleTimeLimit: 3, speed: 1.25,
+    poster: 'npt:0:08', controls: true
   });
 </script>
 </body>

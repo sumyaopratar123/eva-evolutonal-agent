@@ -118,6 +118,10 @@ class ModelResult:
     say: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     final: bool = False
+    # Opaque adapter extras (e.g. provider reasoning blocks that must be replayed
+    # verbatim next turn). The core never interprets this - it only copies it into
+    # the assistant event's meta, keeping the model seam provider-neutral.
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -136,7 +140,8 @@ class ModelAdapter(Protocol):
     supports_native_tools: bool
 
     def run_turn(self, turn: AgentTurn,
-                 on_delta: "Callable[[str], None] | None" = None) -> ModelResult:
+                 on_delta: "Callable[[str], None] | None" = None,
+                 on_think: "Callable[[str], None] | None" = None) -> ModelResult:
         ...
 
 
@@ -229,6 +234,7 @@ def run_agent_loop(
     max_steps: int = 50,
     on_say: Callable[[str], None] | None = None,
     on_say_delta: Callable[[str], None] | None = None,
+    on_think_delta: Callable[[str], None] | None = None,
     on_tool_call: Callable[[ToolCall], None] | None = None,
     on_observation: Callable[[ToolObservation], None] | None = None,
     on_error: Callable[[str, Exception], None] | None = None,
@@ -247,6 +253,11 @@ def run_agent_loop(
     adapter that supports streaming calls it with assistant text fragments as they
     arrive. Adapters that do not stream simply ignore it; the final ModelResult is
     identical either way, so the rest of the loop is unaffected.
+
+    `on_think_delta`, if given, is the sink for the model's REASONING text (extended
+    thinking / reasoning_content): adapters for reasoning models surface those
+    fragments live so the human can follow the thought process. It is forwarded
+    only when set, so adapters without the parameter keep working unchanged.
     """
     # Adapter identity (model/adapter/endpoint) is stamped into each event's audit
     # meta. Optional + duck-typed so the core stays provider-neutral.
@@ -264,8 +275,11 @@ def run_agent_loop(
         step += 1
         turn = AgentTurn(system=system, events=session.events(), tools=tools, mode=mode)
 
+        run_kwargs: dict = {"on_delta": on_say_delta}
+        if on_think_delta is not None:
+            run_kwargs["on_think"] = on_think_delta
         try:
-            result = adapter.run_turn(turn, on_delta=on_say_delta)
+            result = adapter.run_turn(turn, **run_kwargs)
         except Exception as exc:  # adapter / transport failure
             if on_error:
                 on_error("model", exc)
@@ -274,6 +288,9 @@ def run_agent_loop(
         asst_meta = {"ts": time.time(), "mode": mode, "step": step,
                      "kind": "assistant"}
         asst_meta.update(identity)
+        # Opaque adapter extras (see ModelResult.meta) ride along in the event log.
+        for k, v in (getattr(result, "meta", None) or {}).items():
+            asst_meta.setdefault(k, v)
         session.append(Event(role="assistant", content=result.say,
                              tool_calls=list(result.tool_calls), meta=asst_meta))
         if on_say and result.say:

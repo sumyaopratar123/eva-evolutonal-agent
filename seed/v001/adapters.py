@@ -106,11 +106,12 @@ def _retry_delay(exc, base: float) -> float:
     return min(base + random.uniform(0, base * 0.5), 60.0)
 
 
-def _call_with_retries(once: Callable, on_delta) -> ModelResult:
+def _call_with_retries(once: Callable, on_delta, on_think=None) -> ModelResult:
     """Run one model turn with bounded retries on TRANSIENT failures (llm_retries in
     the parameter harness, exponential backoff). A turn that already streamed text to
-    the sink is NOT retried - the user saw partial output and a silent re-run would
-    duplicate it; that error propagates and the session-level handling takes over."""
+    EITHER sink (answer or reasoning) is NOT retried - the user saw partial output and
+    a silent re-run would duplicate it; that error propagates and the session-level
+    handling takes over."""
     try:
         retries = int(params.get("llm_retries"))
     except Exception:
@@ -118,14 +119,19 @@ def _call_with_retries(once: Callable, on_delta) -> ModelResult:
     delay = 2.0
     for attempt in range(retries + 1):
         streamed = {"hit": False}
-        if on_delta is None:
-            sink = None
-        else:
-            def sink(text, _s=streamed):
+
+        def _wrap(cb, _s=streamed):
+            if cb is None:
+                return None
+
+            def sink(text, _cb=cb, _s=_s):
                 _s["hit"] = True
-                on_delta(text)
+                _cb(text)
+            return sink
+
+        sink, think_sink = _wrap(on_delta), _wrap(on_think)
         try:
-            return once(sink)
+            return once(sink, think_sink)
         except Exception as exc:
             if attempt >= retries or streamed["hit"] or not _is_transient(exc):
                 raise
@@ -234,7 +240,7 @@ class FakeAdapter:
     def identity(self) -> dict:
         return {"adapter": "fake", "model": "fake"}
 
-    def run_turn(self, turn: AgentTurn, on_delta=None) -> ModelResult:
+    def run_turn(self, turn: AgentTurn, on_delta=None, on_think=None) -> ModelResult:
         if callable(self._script):
             r = self._script(turn)
         elif self._i < len(self._script):
@@ -369,10 +375,12 @@ class OpenAIChatAdapter:
                                      "content": f"OBSERVATION ({label}):\n{_frame_tool_output(ev.content)}"})
         return messages
 
-    def run_turn(self, turn: AgentTurn, on_delta=None) -> ModelResult:
-        return _call_with_retries(lambda sink: self._run_turn_once(turn, sink), on_delta)
+    def run_turn(self, turn: AgentTurn, on_delta=None, on_think=None) -> ModelResult:
+        return _call_with_retries(
+            lambda sink, think: self._run_turn_once(turn, sink, think),
+            on_delta, on_think)
 
-    def _run_turn_once(self, turn: AgentTurn, on_delta=None) -> ModelResult:
+    def _run_turn_once(self, turn: AgentTurn, on_delta=None, on_think=None) -> ModelResult:
         self._step += 1
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -392,10 +400,16 @@ class OpenAIChatAdapter:
             if on_delta is not None:
                 body["stream"] = True
                 lines = self._stream_transport(self.endpoint, body, headers)
-                return _consume_openai_stream(lines, on_delta, f"c{self._step}")
+                return _consume_openai_stream(lines, on_delta, f"c{self._step}",
+                                              on_think)
             data = self._transport(self.endpoint, body, headers)
             msg = data["choices"][0]["message"]
             say = msg.get("content") or ""
+            # Reasoning models on OpenAI-compatible endpoints (DeepSeek, vLLM, ...)
+            # return the thought process as `reasoning_content` - surface it.
+            reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+            if on_think and reasoning:
+                on_think(reasoning)
             calls = []
             for tc in (msg.get("tool_calls") or []):
                 fn = tc.get("function", {}) or {}
@@ -457,6 +471,8 @@ class AnthropicAdapter:
     def __init__(self, *, endpoint: str, model: str, api_key: str,
                  max_tokens: int = 4096, temperature: "float | None" = None,
                  timeout: int | None = None, cache: bool = True,
+                 thinking_budget: "int | None" = None,
+                 thinking_adaptive: bool = False,
                  transport: "Callable[[str, dict, dict], dict] | None" = None,
                  stream_transport: "Callable | None" = None):
         self.endpoint = endpoint
@@ -464,6 +480,16 @@ class AnthropicAdapter:
         self.api_key = api_key
         self.max_tokens = max_tokens
         self.temperature = temperature
+        # Extended thinking, two generations of the API knob (the API demands default
+        # temperature with thinking, so temperature is dropped when enabled):
+        #   adaptive -> {"type": "adaptive"}; the model decides when/how much to think.
+        #     The ONLY mode on current models (Sonnet 5 / Opus 4.7+ reject "enabled").
+        #   budget   -> {"type": "enabled", "budget_tokens": N}; for older models
+        #     (<= Sonnet/Opus/Haiku 4.5) that do not support adaptive.
+        self.thinking_adaptive = bool(thinking_adaptive)
+        self.thinking_budget = (None if thinking_adaptive
+                                else max(1024, thinking_budget) if thinking_budget
+                                else None)
         self.timeout = timeout if timeout is not None else _env_int("LLM_TIMEOUT", 180)
         self.cache = cache
         self._transport = transport or _http_post_json
@@ -471,8 +497,17 @@ class AnthropicAdapter:
         self._step = 0
 
     def identity(self) -> dict:
-        return {"adapter": "anthropic", "model": self.model,
-                "endpoint": self.endpoint, "prompt_cache": self.cache}
+        ident = {"adapter": "anthropic", "model": self.model,
+                 "endpoint": self.endpoint, "prompt_cache": self.cache}
+        if self.thinking_adaptive:
+            ident["thinking"] = "adaptive"
+        elif self.thinking_budget:
+            ident["thinking"] = self.thinking_budget
+        return ident
+
+    @property
+    def _thinking_on(self) -> bool:
+        return self.thinking_adaptive or bool(self.thinking_budget)
 
     # -- content blocks ---------------------------------------------------- #
     @staticmethod
@@ -504,14 +539,35 @@ class AnthropicAdapter:
                     blocks.append(b)
         return blocks or [self._text_block("")]
 
+    @staticmethod
+    def _thinking_blocks(ev) -> list[dict]:
+        """Well-formed thinking blocks saved on an assistant event (audit meta).
+        Only blocks the API will accept are replayed: `thinking` needs its signature,
+        `redacted_thinking` its opaque data."""
+        out: list[dict] = []
+        for b in (getattr(ev, "meta", None) or {}).get("thinking_blocks") or []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "thinking" and b.get("signature"):
+                out.append({"type": "thinking", "thinking": b.get("thinking", ""),
+                            "signature": b["signature"]})
+            elif b.get("type") == "redacted_thinking" and b.get("data"):
+                out.append({"type": "redacted_thinking", "data": b["data"]})
+        return out
+
     def _render(self, turn: AgentTurn) -> list[dict]:
         evs = turn.events
         # tool_call ids that actually have a tool result in this window
         result_ids = {ev.tool_call_id for ev in evs
                       if ev.role == "tool" and ev.tool_call_id}
         answered: set = set()
+        # With extended thinking, the API requires the LAST assistant turn (the one
+        # whose tool_use is being answered) to replay its thinking blocks verbatim,
+        # signature included. They ride in the event meta (see core: ModelResult.meta).
+        last_asst = max((i for i, e in enumerate(evs) if e.role == "assistant"),
+                        default=-1)
         messages: list[dict] = []
-        for ev in evs:
+        for i, ev in enumerate(evs):
             if ev.role == "system":
                 continue
             if ev.role == "user":
@@ -519,6 +575,8 @@ class AnthropicAdapter:
             elif ev.role == "assistant":
                 kept = [c for c in ev.tool_calls if c.id in result_ids]
                 blocks: list[dict] = []
+                if self._thinking_on and i == last_asst:
+                    blocks.extend(self._thinking_blocks(ev))
                 if ev.content:
                     blocks.append(self._text_block(ev.content))
                 for c in kept:
@@ -545,10 +603,12 @@ class AnthropicAdapter:
             messages.pop(0)
         return messages
 
-    def run_turn(self, turn: AgentTurn, on_delta=None) -> ModelResult:
-        return _call_with_retries(lambda sink: self._run_turn_once(turn, sink), on_delta)
+    def run_turn(self, turn: AgentTurn, on_delta=None, on_think=None) -> ModelResult:
+        return _call_with_retries(
+            lambda sink, think: self._run_turn_once(turn, sink, think),
+            on_delta, on_think)
 
-    def _run_turn_once(self, turn: AgentTurn, on_delta=None) -> ModelResult:
+    def _run_turn_once(self, turn: AgentTurn, on_delta=None, on_think=None) -> ModelResult:
         self._step += 1
         headers = {
             "x-api-key": self.api_key,
@@ -573,20 +633,45 @@ class AnthropicAdapter:
             "tools": tools,
             "messages": messages,
         }
-        if self.temperature is not None:
+        if self.thinking_adaptive:
+            # Adaptive thinking (Sonnet 5 / Opus 4.7+): the model decides how much to
+            # think; "display: summarized" is required to see reasoning text at all
+            # (newer models default to omitted). Thinking tokens count toward
+            # max_tokens, so give headroom. Temperature must stay at the default.
+            body["thinking"] = {"type": "adaptive", "display": "summarized"}
+            body["max_tokens"] = max(self.max_tokens, 8192)
+        elif self.thinking_budget:
+            # Extended thinking (legacy, <= *-4.5 models): temperature must stay at
+            # the default, and max_tokens must exceed the thinking budget (headroom
+            # for the visible answer).
+            body["thinking"] = {"type": "enabled",
+                                "budget_tokens": self.thinking_budget}
+            body["max_tokens"] = max(self.max_tokens, self.thinking_budget + 2048)
+        elif self.temperature is not None:
             body["temperature"] = self.temperature
         # Stream iff a delta sink is wired; caching stays intact in the streamed body.
         if on_delta is not None:
             body["stream"] = True
             lines = self._stream_transport(self.endpoint, body, headers)
-            return _consume_anthropic_stream(lines, on_delta, f"c{self._step}")
+            return _consume_anthropic_stream(lines, on_delta, f"c{self._step}",
+                                             on_think)
         data = self._transport(self.endpoint, body, headers)
         say_parts: list[str] = []
         calls: list[ToolCall] = []
+        thinking_blocks: list[dict] = []
         for block in (data.get("content") or []):
             btype = block.get("type")
             if btype == "text":
                 say_parts.append(block.get("text", ""))
+            elif btype == "thinking":
+                thinking_blocks.append({"type": "thinking",
+                                        "thinking": block.get("thinking", ""),
+                                        "signature": block.get("signature", "")})
+                if on_think and block.get("thinking"):
+                    on_think(block["thinking"])
+            elif btype == "redacted_thinking":
+                thinking_blocks.append({"type": "redacted_thinking",
+                                        "data": block.get("data", "")})
             elif btype == "tool_use":
                 inp = block.get("input")
                 if not isinstance(inp, dict):
@@ -594,9 +679,10 @@ class AnthropicAdapter:
                 calls.append(ToolCall(id=block.get("id") or f"c{self._step}",
                                       name=block.get("name", ""), arguments=inp))
         say = "".join(say_parts)
+        meta = {"thinking_blocks": thinking_blocks} if thinking_blocks else {}
         if calls:
-            return ModelResult(say=say, tool_calls=calls)
-        return ModelResult(say=say, final=True)
+            return ModelResult(say=say, tool_calls=calls, meta=meta)
+        return ModelResult(say=say, final=True, meta=meta)
 
 
 def _http_post_json(endpoint: str, body: dict, headers: dict) -> dict:
@@ -648,9 +734,11 @@ def _http_post_stream(endpoint: str, body: dict, headers: dict):
             pass
 
 
-def _consume_openai_stream(lines, on_delta, fallback_id: str) -> ModelResult:
+def _consume_openai_stream(lines, on_delta, fallback_id: str,
+                           on_think=None) -> ModelResult:
     """Assemble a ModelResult from an OpenAI Chat Completions SSE stream, calling
-    on_delta(text) for each content fragment as it arrives. Tool-call arguments are
+    on_delta(text) for each content fragment as it arrives (and on_think(text) for
+    `reasoning_content` fragments from reasoning models). Tool-call arguments are
     streamed in pieces (by index) and reassembled before json-decoding."""
     say_parts: list[str] = []
     slots: dict = {}      # index -> {id, name, args}
@@ -669,6 +757,9 @@ def _consume_openai_stream(lines, on_delta, fallback_id: str) -> ModelResult:
         if not choices:
             continue
         delta = choices[0].get("delta") or {}
+        think = delta.get("reasoning_content") or delta.get("reasoning")
+        if think and on_think:
+            on_think(think)
         text = delta.get("content")
         if text:
             say_parts.append(text)
@@ -705,12 +796,16 @@ def _consume_openai_stream(lines, on_delta, fallback_id: str) -> ModelResult:
     return ModelResult(say=say, final=True)
 
 
-def _consume_anthropic_stream(lines, on_delta, fallback_id: str) -> ModelResult:
+def _consume_anthropic_stream(lines, on_delta, fallback_id: str,
+                              on_think=None) -> ModelResult:
     """Assemble a ModelResult from an Anthropic Messages SSE stream, calling
-    on_delta(text) for each text_delta. tool_use input arrives as input_json_delta
-    fragments (by block index) and is reassembled before json-decoding."""
+    on_delta(text) for each text_delta and on_think(text) for each thinking_delta
+    (extended thinking). tool_use input arrives as input_json_delta fragments (by
+    block index) and is reassembled before json-decoding. thinking/redacted_thinking
+    blocks are collected verbatim (signature included) into ModelResult.meta so the
+    next request can replay them - the API requires that on tool-use turns."""
     say_parts: list[str] = []
-    slots: dict = {}      # index -> {type, id, name, json}
+    slots: dict = {}      # index -> {type, id, name, json, think, sig, data}
     order: list = []
     for line in lines:
         if not line.startswith("data:"):
@@ -725,7 +820,8 @@ def _consume_anthropic_stream(lines, on_delta, fallback_id: str) -> ModelResult:
             idx = obj.get("index", 0)
             cb = obj.get("content_block") or {}
             slots[idx] = {"type": cb.get("type"), "id": cb.get("id"),
-                          "name": cb.get("name", ""), "json": ""}
+                          "name": cb.get("name", ""), "json": "",
+                          "think": "", "sig": "", "data": cb.get("data", "")}
             order.append(idx)
         elif t == "content_block_delta":
             idx = obj.get("index", 0)
@@ -737,6 +833,17 @@ def _consume_anthropic_stream(lines, on_delta, fallback_id: str) -> ModelResult:
                     say_parts.append(text)
                     if on_delta:
                         on_delta(text)
+            elif dt == "thinking_delta":
+                slot = slots.get(idx)
+                text = d.get("thinking", "")
+                if slot is not None:
+                    slot["think"] += text
+                if text and on_think:
+                    on_think(text)
+            elif dt == "signature_delta":
+                slot = slots.get(idx)
+                if slot is not None:
+                    slot["sig"] += d.get("signature", "")
             elif dt == "input_json_delta":
                 slot = slots.get(idx)
                 if slot is not None:
@@ -747,9 +854,19 @@ def _consume_anthropic_stream(lines, on_delta, fallback_id: str) -> ModelResult:
                 f"anthropic stream error: {err.get('message', '')}",
                 code=err.get("type"))
     calls = []
+    thinking_blocks: list[dict] = []
     for i, idx in enumerate(order):
         slot = slots[idx]
-        if slot.get("type") != "tool_use":
+        stype = slot.get("type")
+        if stype == "thinking":
+            thinking_blocks.append({"type": "thinking", "thinking": slot["think"],
+                                    "signature": slot["sig"]})
+            continue
+        if stype == "redacted_thinking":
+            thinking_blocks.append({"type": "redacted_thinking",
+                                    "data": slot.get("data", "")})
+            continue
+        if stype != "tool_use":
             continue
         try:
             inp = json.loads(slot["json"] or "{}")
@@ -760,9 +877,10 @@ def _consume_anthropic_stream(lines, on_delta, fallback_id: str) -> ModelResult:
         calls.append(ToolCall(id=slot.get("id") or f"{fallback_id}_{i}",
                               name=slot.get("name", ""), arguments=inp))
     say = "".join(say_parts)
+    meta = {"thinking_blocks": thinking_blocks} if thinking_blocks else {}
     if calls:
-        return ModelResult(say=say, tool_calls=calls)
-    return ModelResult(say=say, final=True)
+        return ModelResult(say=say, tool_calls=calls, meta=meta)
+    return ModelResult(say=say, final=True, meta=meta)
 
 
 # --------------------------------------------------------------------------- #
@@ -778,6 +896,11 @@ def make_adapter(env: "dict[str, str] | None" = None):
         EVA_TEMPERATURE (optional; omitted entirely if unset)
         EVA_MAX_TOKENS  (anthropic; default 4096)
         EVA_PROMPT_CACHE (anthropic; default on - set 0/false/off to disable)
+        EVA_THINKING (anthropic; opt-in reasoning display, streamed live into the
+                      TUI as dim lines. 1/adaptive -> adaptive thinking (Sonnet 5,
+                      Opus 4.7+); budget -> legacy enabled+budget for <= *-4.5 models)
+        EVA_THINKING_BUDGET (anthropic; token budget for EVA_THINKING=budget,
+                      default 2048, min 1024)
     """
     env = dict(os.environ if env is None else env)
     provider = (env.get("EVA_PROVIDER") or "openai_chat").strip().lower()
@@ -808,9 +931,20 @@ def make_adapter(env: "dict[str, str] | None" = None):
             max_tokens = 4096
         cache = (env.get("EVA_PROMPT_CACHE", "1").strip().lower()
                  not in ("0", "false", "no", "off"))
+        thinking_budget = None
+        thinking_adaptive = False
+        t_raw = (env.get("EVA_THINKING") or "").strip().lower()
+        if t_raw in ("1", "true", "on", "yes", "adaptive"):
+            thinking_adaptive = True
+        elif t_raw in ("budget", "enabled"):
+            try:
+                thinking_budget = int((env.get("EVA_THINKING_BUDGET") or "2048").strip())
+            except ValueError:
+                thinking_budget = 2048
         return AnthropicAdapter(endpoint=endpoint, model=model, api_key=key,
                                 max_tokens=max_tokens, temperature=temperature,
-                                cache=cache)
+                                cache=cache, thinking_budget=thinking_budget,
+                                thinking_adaptive=thinking_adaptive)
 
     if provider in ("openai_chat", "openai_compatible_chat", "chat"):
         endpoint = (env.get("EVA_ENDPOINT") or env.get("LLM_ENDPOINT")

@@ -46,6 +46,12 @@ services:
       # and survive restarts. ~/.local/bin is on PATH.
       HOME: "/eva/.local"
       PATH: "/eva/.local/.local/bin:/eva/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      # NOTE: the persistent shared-library shelf (/eva/.local/lib) is deliberately NOT
+      # on a global LD_LIBRARY_PATH here - that would make the KERNEL's python load libs
+      # from an EVA-writable dir (gate-integrity risk). The kernel injects it into the
+      # agent/supervisor child environment only (see organism.run_current_supervisor).
+      # FREE boot provisioning of state/system-deps.txt; =0 disables.
+      EVA_SYSTEM_DEPS: "${EVA_SYSTEM_DEPS:-}"
       # EVA runs INSIDE the sandbox here: it cannot read the host clipboard, so the
       # clipboard bridge falls back to host-staged files (run.ps1 /paste watcher).
       EVA_IN_CONTAINER: "1"
@@ -60,6 +66,9 @@ services:
       # prompt caching is on by default.
       EVA_MAX_TOKENS: "${EVA_MAX_TOKENS:-}"
       EVA_PROMPT_CACHE: "${EVA_PROMPT_CACHE:-}"
+      # Extended thinking (anthropic, opt-in): stream reasoning into the TUI.
+      EVA_THINKING: "${EVA_THINKING:-}"
+      EVA_THINKING_BUDGET: "${EVA_THINKING_BUDGET:-}"
       # Legacy fallbacks (used only if the EVA_* vars above are unset).
       LLM_ENDPOINT: "${LLM_ENDPOINT:-}"
       LLM_MODEL: "${LLM_MODEL:-}"
@@ -78,6 +87,8 @@ services:
       EVA_TUI_FULL: "${EVA_TUI_FULL:-}"
       NO_COLOR: "${NO_COLOR:-}"
       EVA_STREAM: "${EVA_STREAM:-}"
+      # Gate verbosity: 1 = full check output during release gates (default: quiet on success).
+      EVA_GATE_VERBOSE: "${EVA_GATE_VERBOSE:-}"
       # Prompt spotlighting (opt-in, default off): frame tool/web/file output as untrusted data.
       EVA_PROMPT_SPOTLIGHT: "${EVA_PROMPT_SPOTLIGHT:-}"
       # Prompt admission audit on promotion (opt-in, default off): screen candidate prompt-surface

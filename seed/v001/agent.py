@@ -43,6 +43,7 @@ WORKSPACE = ROOT / "workspace"
 SESSIONS = STATE / "sessions"
 
 BACKLOG = STATE / "backlog.jsonl"            # friction memory
+LESSONS = STATE / "lessons.jsonl"            # episodic memory: durable insights across sessions
 PIVOT_REQUEST = STATE / "pivot_request.json"  # improve/pivot path
 INPUT_HISTORY = STATE / "input_history"       # readline recall of messages across sessions
 
@@ -98,6 +99,10 @@ Do useful work for the user inside the workspace.
   do awkwardly, HANDLE it now - and if it looks DURABLE (likely to recur), also record it
   with note_evolution_need using a STABLE signature (a slug for the capability class). A
   one-off is fine to just do; only a need that RECURS is proposed as a real skill to evolve.
+- Sessions die, lessons survive: when you learn something DURABLE (a failed approach and
+  why, an environment quirk, a user preference), record it with note_lesson - especially
+  before finishing. Not routine progress; only what saves a future you a re-discovery.
+  And when a task feels FAMILIAR, check your cross-session memory first with recall.
 - If you lack information needed to proceed, ASK the user in your reply (plain text,
   no tool); your turn ends and the conversation continues - don't guess.
 - If the user only asks a question or makes small talk, ANSWER directly in your
@@ -126,6 +131,9 @@ concrete change; implement exactly that - and stay responsive to them throughout
   candidate's tests.py --self). Only request promotion if they pass. Never push a
   candidate you have not actually run.
 - Keep changes small. If you hit unrelated friction, note it and keep going.
+- RETRO before finishing: if this change taught you something durable about your own
+  code, a failed approach, or the user's preferences, record it with note_lesson so
+  future sessions inherit it. Skip routine progress.
 - Finish only after the change is written AND verified. If the task is unclear or you
   need the user to decide, ASK in a plain reply (no tool) and do NOT finish;
   a question is never a finish."""
@@ -143,7 +151,9 @@ the user for file contents; never use shell heredocs/sed for code).
 When you add a test, place the new check_/test_ function ABOVE the `_all_checks` /
 `__main__` block (functions defined after it never run). Before request_promotion,
 run the candidate's tests with run_tests and only promote if they pass. Strengthen tests
-when you fix a friction class. Never weaken gates; organism.py is off-limits."""
+when you fix a friction class. RETRO before finishing: record durable insights (failed
+approaches, environment quirks, code discoveries) with note_lesson - future sessions
+inherit your journal. Never weaken gates; organism.py is off-limits."""
 
 REVIEW_SYSTEM = """You are the review agent of EVA.
 This is a CONVERSATION with the user about inspecting your code and workspace -
@@ -384,6 +394,8 @@ _ENV_SAFE = (
     "  - HTTP: there is no curl/wget baked in; use Python (urllib.request) or `node` (global fetch).\n"
     "  - Python libs: `pip install --user <pkg>` installs under ~/.local and is importable.\n"
     "  - Binaries: place a static binary in ~/.local/bin (= $HOME/.local/bin, on PATH) and run it by name.\n"
+    "  - Native libs: /eva/.local/lib is on LD_LIBRARY_PATH and PERSISTS - shared libraries\n"
+    "    placed there (e.g. by an earlier FREE-sandbox session) are usable even here in SAFE.\n"
     "You do NOT have root or apt here, so SYSTEM packages/libraries cannot be installed\n"
     "(e.g. the shared libraries a browser engine needs). If a task needs one, do NOT keep\n"
     "retrying apt/sudo/root - recognise it as an IMAGE/substrate need: either the user must\n"
@@ -400,10 +412,15 @@ _ENV_FREE = (
     "  - install system packages: `apt-get update && apt-get install -y <pkg>` (you are root),\n"
     "  - add the system libraries a browser/native tool needs, and run them,\n"
     "  - `pip install --user <pkg>` and static binaries in ~/.local/bin as usual.\n"
-    "Caveat: this container is EPHEMERAL (started with --rm), so apt-installed system\n"
-    "packages last only for THIS session. For a DURABLE capability, prove it works here,\n"
-    "then propose baking it into the image (a human Dockerfile change). You still cannot\n"
-    "modify organism.py (the kernel)."
+    "Caveat: this container is EPHEMERAL (started with --rm), so a bare apt install lasts\n"
+    "only for THIS session. To make a skill's system deps DURABLE, use these mechanisms:\n"
+    "  - append each needed apt package (one name per line) to ../state/system-deps.txt -\n"
+    "    the kernel re-installs that list at every FREE start (cached, takes seconds). Do\n"
+    "    this whenever a new skill needs system packages, or it will break next session;\n"
+    "  - additionally copy the specific .so libraries a skill needs into /eva/.local/lib\n"
+    "    (persistent, on LD_LIBRARY_PATH) so the skill also works in the SAFE sandbox;\n"
+    "  - pip --user packages and ~/.cache downloads persist already (HOME is a volume).\n"
+    "You still cannot modify organism.py (the kernel)."
 )
 
 
@@ -510,6 +527,51 @@ def backlog_summary(limit: int = 8) -> str:
     items = [(s, counts[s]) for s in order if counts.get(s, 0) > 0]
     items.sort(key=lambda x: -x[1])
     return "\n".join(f"{c}x  {s}" for s, c in items[:limit]) or "(none)"
+
+
+def record_lesson(lesson: str, category: str, mode: str) -> None:
+    """Append a durable insight to the lessons journal (state/lessons.jsonl). Like the
+    friction backlog this is BEST-EFFORT episodic memory - a write failure must never
+    crash the agent. Lessons outlive sessions: they are surfaced to every future run."""
+    text = str(lesson or "").strip()
+    if not text:
+        return
+    cat = str(category or "").strip().lower()[:20]
+    try:
+        ensure_dirs()
+        record = {"time": time.time(), "release": str(RELEASE), "mode": mode,
+                  "category": cat, "lesson": text[:500]}
+        with LESSONS.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def lessons_summary(limit: int = 10) -> str:
+    """The most recent durable lessons, newest last, deduped - EVA's experience
+    carried across sessions. Injected into the initial context of every mode."""
+    if not LESSONS.exists():
+        return "(none yet)"
+    rows: list[str] = []
+    seen: set[str] = set()
+    try:
+        for line in LESSONS.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            text = str(rec.get("lesson") or "").strip()
+            if not text or text.lower() in seen:
+                continue
+            seen.add(text.lower())
+            cat = str(rec.get("category") or "").strip()
+            rows.append(f"- [{cat}] {text[:200]}" if cat else f"- {text[:200]}")
+    except Exception:
+        return "(none yet)"
+    return "\n".join(rows[-limit:]) or "(none yet)"
 
 
 def backlog_latest_detail(signature: str) -> str:
@@ -749,6 +811,30 @@ def _cmd_resume(state, arg, view, mode, interactive):
     view.notice(f"switched to work session {target} ({len(new.events())} events).")
 
 
+def _control_args(mode: str, rest: list) -> str:
+    """Reduce the command-line words after the mode to the supported CONTROL
+    arguments: `resume [id]` and (work only) `--list`. Positional message text is
+    NOT a task channel any more - it is noticed and ignored, and the human is
+    prompted in the chat instead (programmatic callers use --task; autonomous runs
+    fall back to default_task_for). This keeps a stray `improve resume <text>` or
+    pasted text from silently seeding a NEW session over a resumable one."""
+    words = [w for w in rest if w and w.strip()]
+    if not words:
+        return ""
+    head = words[0].lower()
+    if mode == "work" and head in {"--list", "list", "sessions"}:
+        return head
+    if head == "resume":
+        keep = words[:2] if (mode == "work" and len(words) > 1) else words[:1]
+        extra = " ".join(words[len(keep):])
+        if extra:
+            print(f"\n(note: ignoring extra text after resume: {extra[:80]!r})")
+        return " ".join(keep)
+    print("\n(note: message arguments on the command line are no longer supported - "
+          f"ignoring {' '.join(words)[:80]!r}; you'll be prompted in the chat)")
+    return ""
+
+
 def _pick_session(mode: str, task: str):
     """Pick the session for this run. work is MULTI-session: the task string may be
     `--list` (list + return), `resume` (most recent) or `resume <id>`. Other modes
@@ -780,10 +866,31 @@ def _pick_session(mode: str, task: str):
     return session, session_id, want_resume, task
 
 
+def _stdin_isatty() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
 def run_mode(mode: str, task: str):
     ensure_dirs()
 
-    human = AutoHumanInterface(default_confirm=True) if AUTO_YES else CliHumanInterface()
+    # attended: a human is at the console and can answer prompts. Every run without
+    # --yes is attended. AUTO_YES only means "auto-approve tool actions" - it must
+    # NOT degrade a conversational mode at a real TTY into a one-shot autonomous run
+    # (that made resumed sessions self-terminate). evolve is not elevated by a TTY:
+    # under AUTO_YES a supervised evolution stays autonomous (docker allocates one).
+    attended = (not AUTO_YES) or (_stdin_isatty()
+                                  and mode in {"work", "improve", "review"})
+    # interactive: the conversation continues after each turn until the human leaves.
+    # Every ATTENDED mode is conversational - evolve included: when EVA ends a turn
+    # with a question (e.g. explaining a planned candidate after a declined approval),
+    # the human must be able to answer instead of watching the session self-terminate.
+    # Autonomous evolve (AUTO_YES) remains a one-shot cycle.
+    interactive = attended
+
+    human = CliHumanInterface() if attended else AutoHumanInterface(default_confirm=True)
     approval = ApprovalPolicy(
         human,
         mode=("never" if AUTO_YES else "on-risk"),
@@ -804,11 +911,6 @@ def run_mode(mode: str, task: str):
     runtime.set_progress(view.tool_running)
 
     system = system_for(mode, session.path)
-    # attended: a human is at the console (all approvals flow through them) - true
-    # for EVERY mode without --yes, including evolve. interactive additionally means
-    # the conversation continues after a finish (evolve ends per cycle instead).
-    attended = not AUTO_YES
-    interactive = attended and mode in {"work", "improve", "review"}
 
     # Mutable interactive state + the in-chat commands that act on it: /model and /provider
     # rebuild the adapter; /resume switches the active work session. Available at EVERY prompt
@@ -854,12 +956,15 @@ def run_mode(mode: str, task: str):
 
     if not resumed:
         if not (task or "").strip():
-            if interactive:
+            if interactive and mode != "evolve":
                 task = _prompt_user(view, commands, sticky=(mode == "improve"))
                 if not task:
                     print("Nothing to do — bye.")
                     return
             else:
+                # evolve always seeds itself: it picks one improvement on its own
+                # (improve is the directed mode). Attended evolve still stays
+                # conversational AFTER each turn so questions reach the human.
                 task = default_task_for(mode)
 
         if state.switched:
@@ -876,9 +981,20 @@ def run_mode(mode: str, task: str):
                 f"Active release: {RELEASE.name}  (from your shell cwd: ../runtime/releases/{RELEASE.name})\n"
                 f"{ENV_CAPABILITIES}\n\n"
                 f"{self_model_brief()}\n\n"
-                f"Friction backlog (repeat counts):\n{backlog_summary()}"
+                f"Friction backlog (repeat counts):\n{backlog_summary()}\n\n"
+                f"Lessons learned (your journal from earlier sessions):\n{lessons_summary()}"
             )
             task_text, task_images = extract_image_attachments(task, WORKSPACE)
+            # Cross-session memory: if past episodes clearly relate to THIS task,
+            # surface them up front (strict match - weak hits would be noise).
+            try:
+                import memory
+                related = memory.relevant(task_text)
+            except Exception:
+                related = ""
+            if related:
+                context += ("\n\nRelevant past episodes (from your cross-session "
+                            "memory; use the recall tool for more):\n" + related)
             state.session.seed([
                 Event(role="system", content=state.system),
                 Event(role="user", content=task_text + "\n\n" + context,
@@ -891,6 +1007,8 @@ def run_mode(mode: str, task: str):
         view.say(text)
 
     on_say_delta = view.on_say_delta if STREAM else None
+    # Reasoning models: stream the thought process live (dim lines) when available.
+    on_think_delta = view.on_think_delta if STREAM else None
 
     def _show_friction(sig):
         # Make the memory VISIBLE the moment it forms: a dim one-liner with the
@@ -907,9 +1025,16 @@ def run_mode(mode: str, task: str):
             _show_friction(sig)
             if maybe_pivot(sig, mode, human, kind="capability_gap"):
                 pivoted["flag"] = True
+        elif call.name == "note_lesson":
+            a = call.arguments or {}
+            record_lesson(a.get("lesson", ""), a.get("category", ""), mode)
 
     def on_observation(obs):
         view.observation(obs)
+        # The next model call follows immediately - bridge its dead time (network +
+        # server-side thinking) with the live waiting timer.
+        if obs.name != "finish":
+            view.model_waiting()
         # Evolution milestones: make the lifecycle of a self-modification visible in
         # the TUI the moment it happens (candidate born / gate passed / promotion
         # requested), instead of burying it in scrolling tool output.
@@ -920,6 +1045,10 @@ def run_mode(mode: str, task: str):
             view.milestone("tests PASS", out.splitlines()[0])
         elif obs.name == "request_promotion" and out.startswith("Promotion requested"):
             view.milestone("promotion requested", out.split(".")[0])
+            # The gates only run AFTER this session ends - tell the human, or they
+            # sit in an open prompt wondering why nothing happens.
+            view.hint("→ next: end the session (Enter/exit) - the supervisor & kernel "
+                      "gates run on exit, then YOU confirm the promotion [y/N].")
         if obs.name == "shell":
             sig = record_shell_friction(obs.output, mode)
             if sig:
@@ -955,6 +1084,9 @@ def run_mode(mode: str, task: str):
 
         # Build the (compacted) turn view from the canonical log on each loop.
         view.begin_turn()
+        # Bridge the dead time until the first streamed token (reasoning models can
+        # think server-side for a while before anything arrives).
+        view.model_waiting()
         outcome = run_agent_loop(
             adapter=state.adapter,
             runtime=runtime,
@@ -966,6 +1098,7 @@ def run_mode(mode: str, task: str):
             mode=mode,
             on_say=on_say,
             on_say_delta=on_say_delta,
+            on_think_delta=on_think_delta,
             on_tool_call=on_tool_call,
             on_observation=on_observation,
             on_error=on_error,
@@ -1014,6 +1147,15 @@ def run_mode(mode: str, task: str):
             break
         reply_text, reply_images = extract_image_attachments(reply, WORKSPACE)
         state.session.append(Event(role="user", content=reply_text, images=reply_images))
+
+    # Episodic memory: distill this session into one compact digest BEFORE any
+    # clear() below - sessions die, episodes survive. Best-effort by design.
+    try:
+        import memory
+        memory.record_episode(state.session.events(), mode, outcome,
+                              release=RELEASE.name)
+    except Exception:
+        pass
 
     # Interactive sessions stay resumable when you leave, so `<mode> resume`
     # continues the conversation even if the agent called `finish` for a turn.
@@ -1093,15 +1235,23 @@ def main():
         dry_run(args[i + 1] if i + 1 < len(args) else "work")
         return
 
-    # `eva` with no mode just starts EVA (work is the default mode). An explicit
-    # mode word still selects it; anything else is treated as a work task.
-    if args and args[0] in MODES:
-        mode = args[0]
-        task = " ".join(args[1:]).strip()
-    else:
-        mode = "work"
-        task = " ".join(args).strip()
+    # Programmatic task channel (used by the supervisor's evolve/pivot pipeline):
+    # everything after --task is the task, verbatim. Human task text on the command
+    # line is gone - people are prompted in the chat instead (see _control_args).
+    forced_task = None
+    if "--task" in args:
+        i = args.index("--task")
+        forced_task = " ".join(args[i + 1:]).strip()
+        args = args[:i]
 
+    # `eva` with no mode just starts EVA (work is the default mode). An explicit
+    # mode word still selects it; remaining words are control arguments only.
+    if args and args[0] in MODES:
+        mode, rest = args[0], args[1:]
+    else:
+        mode, rest = "work", args
+
+    task = forced_task if forced_task is not None else _control_args(mode, rest)
     run_mode(mode, task)
 
 

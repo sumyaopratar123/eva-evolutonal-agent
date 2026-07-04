@@ -40,7 +40,7 @@ you'd call "the agent" — loop, tools, adapters, memory, self-model, TUI — is
 
 ## Core concepts
 
-- **Immutable kernel** — `organism.py` (~600 lines) is baked into the image, out of the
+- **Immutable kernel** — `organism.py` (~900 lines) is baked into the image, out of the
   agent's reach. It seeds the genome, runs the final gate, keeps the release ledger.
 - **Gated evolution** — EVA never edits the running code. It builds a *candidate copy*,
   which must survive the full gate stack (tests, ratchet, smoke, dry-runs, kernel
@@ -53,6 +53,10 @@ you'd call "the agent" — loop, tools, adapters, memory, self-model, TUI — is
 - **Friction-driven growth** — failed commands, errors, and recurring capability gaps
   land in a persistent backlog. New skills are *earned from what you actually keep
   asking for*, not designed up front.
+- **Lived experience** — every session ends as a compact episode in a cross-session
+  memory (recalled on demand, auto-surfaced on related tasks), plus a lessons journal
+  and vitals. Evolved skills persist too: even system packages survive the throwaway
+  container via a kernel-provisioned manifest.
 - **Contained, not "safe"** — hardened container (non-root, read-only rootfs, caps
   dropped, resource limits), **key-guard sidecar** (on by default) so the API key never
   enters EVA's container, opt-in prompt-injection spotlighting, human-in-the-loop approvals.
@@ -70,6 +74,11 @@ passes 87/87 checks and both gates — and is promoted to **v002**:
   (crisp text, jump between milestones with <code>[</code>/<code>]</code>)
 </p>
 
+There's a second recorded session on the page: EVA **evolves a Playwright browser skill**
+from scratch — installs the stack, hits a real gate failure, debugs it, passes 122 checks
+and promotes to a new release whose system deps persist across containers.
+<a href="https://arturkorb3.github.io/eva-evolutional-agent/#evolution">▶ Watch the browser-skill evolution</a>
+
 ## Quickstart
 
 Prerequisites: Docker (Engine + Compose v2) running — `docker compose version` to verify.
@@ -82,9 +91,10 @@ eva                     # first run: a short wizard sets up provider/model/key, 
 Just talk to EVA in plain language; `/help` lists in-chat commands. From your shell:
 
 ```powershell
-eva improve "add a CHANGELOG and report it in work mode"   # directed self-change
-eva evolve 3 --yes --allow-shell                           # autonomous (Docker contains it)
-eva status  ·  eva rollback  ·  eva help                   # ledger · step back · everything else
+eva improve                        # directed self-change - describe the task in the chat
+eva evolve 3 --yes --allow-shell   # autonomous (Docker contains it)
+eva work resume                    # pick up your last work session (each mode: <mode> resume)
+eva status  ·  eva rollback  ·  eva help    # ledger · step back · everything else
 ```
 
 Works the same on Windows (PowerShell) and Linux/macOS (bash/zsh). The core is

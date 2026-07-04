@@ -10,7 +10,15 @@ Adjust MILESTONES (event index -> (tag, label)) for a new recording; list the
 events with their text first, e.g.:
   py -c "import json;[print(i,e[0],json.loads(l)[2][:100]) ...]"
 
-Usage:  py scripts/annotate_cast.py <in.cast> <out.cast>
+Usage:  py scripts/annotate_cast.py <in.cast> <out.cast> [milestones.json] [max_gap]
+
+  milestones.json  optional: {"<event index>": ["TAG", "label"], ...} replaces the
+                   built-in MILESTONES (so new demos need no edit here). May also be
+                   {"milestones": {...}, "fast": [[start_idx, end_idx, scale], ...]} -
+                   "fast" ranges play in time-lapse: inter-event gaps inside
+                   [start, end) are divided by scale (output stays intact).
+  max_gap          optional: cap the pause between consecutive events (seconds).
+                   Long waits (downloads, installs) compress; output stays intact.
 """
 import json
 import sys
@@ -39,15 +47,29 @@ def banner(tag: str, label: str) -> str:
             + c + "\u2570" + "\u2500" * (w - 2) + "\u256f" + r + "\r\n")
 
 
-def main(src: str, dst: str) -> None:
+def main(src: str, dst: str, milestones=None, max_gap: float = 0.0,
+         fast=None) -> None:
+    ms = milestones if milestones is not None else MILESTONES
     lines = open(src, encoding="utf-8").read().splitlines()
     header, events = lines[0], [json.loads(l) for l in lines[1:]]
+    if max_gap > 0 or fast:  # compress waits / time-lapse ranges, keep all output
+        prev_raw, t_new = None, 0.0
+        for i, e in enumerate(events):
+            gap = 0.0 if prev_raw is None else max(e[0] - prev_raw, 0.0)
+            if max_gap > 0:
+                gap = min(gap, max_gap)
+            for a, b, scale in (fast or []):
+                if a <= i < b:
+                    gap /= scale
+                    break
+            prev_raw, t_new = e[0], t_new + gap
+            e[0] = round(t_new, 4)
     out, offset = [], 0.0
     for i, e in enumerate(events):
         t = round(e[0] + offset, 4)
         out.append([t, e[1], e[2]])
-        if i in MILESTONES:
-            tag, label = MILESTONES[i]
+        if i in ms:
+            tag, label = ms[i]
             out.append([round(t + 0.10, 4), "m", f"{tag}: {label}"])
             out.append([round(t + 0.15, 4), "o", banner(tag, label)])
             offset += DWELL
@@ -55,11 +77,19 @@ def main(src: str, dst: str) -> None:
         f.write(header + "\n")
         for e in out:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    print(f"annotated: {len(out)} events, {len(MILESTONES)} markers, "
+    print(f"annotated: {len(out)} events, {len(ms)} markers, "
           f"ends at {out[-1][0]:.1f}s -> {dst}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if not 3 <= len(sys.argv) <= 5:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2])
+    milestones, fast = None, None
+    if len(sys.argv) >= 4:
+        raw = json.load(open(sys.argv[3], encoding="utf-8"))
+        if "milestones" in raw:
+            fast = raw.get("fast")
+            raw = raw["milestones"]
+        milestones = {int(k): tuple(v) for k, v in raw.items()}
+    max_gap = float(sys.argv[4]) if len(sys.argv) == 5 else 0.0
+    main(sys.argv[1], sys.argv[2], milestones, max_gap, fast)

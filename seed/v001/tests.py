@@ -912,6 +912,389 @@ def check_context_summary_parallel_tool_calls():
     assert "Results for: python release" in line, line
 
 
+def check_compaction_preserves_dropped_user_messages():
+    """User messages from the dropped middle survive compaction: older constraints,
+    corrections and decisions ('only edit X') stay in the sent view via a dedicated
+    'Human said earlier' section - otherwise compaction is how the agent silently
+    violates instructions it was given twenty turns ago. The whole synthetic block
+    is marked as memory (not a fresh instruction), earlier synthetic summaries are
+    never re-quoted, the section is bounded, and compaction stays deterministic."""
+    import context as context_mod
+
+    evs = [core.Event(role="system", content="S"),
+           core.Event(role="user", content="task")]
+    evs.append(core.Event(role="user",
+                          content="Only edit context.py, never touch organism.py"))
+    evs.append(core.Event(role="user",
+                          content=context_mod.MEMORY_MARK + "\nold synthetic summary"))
+    for i in range(20):
+        evs.append(core.Event(role="user", content=f"note {i % 3}"))  # dupes collapse
+        evs.append(core.Event(role="assistant", content=f"step {i}",
+                              tool_calls=[core.ToolCall(str(i), "shell", {"cmd": "x"})]))
+        evs.append(core.Event(role="tool", content="x" * 2000, name="shell",
+                              tool_call_id=str(i)))
+    view = context_mod.compact(evs, budget=1000, keep=4)
+    assert len(view) < len(evs)
+    synth = [e for e in view if (e.content or "").startswith(context_mod.MEMORY_MARK)]
+    assert len(synth) == 1, "condensed context must be ONE marked user event"
+    body = synth[0].content
+    assert "Human said earlier" in body, body
+    assert "Only edit context.py, never touch organism.py" in body, body
+    assert "old synthetic summary" not in body, "must not re-quote older summaries"
+    assert body.count("- note") <= 10, "human-said section must stay bounded"
+    assert context_mod.compact(evs, budget=1000, keep=4) == view, "must be deterministic"
+
+
+def _compaction_history(turns, tool_out="x" * 2000, tool_name="shell"):
+    evs = [core.Event(role="system", content="S"),
+           core.Event(role="user", content="task")]
+    for i in range(turns):
+        evs.append(core.Event(role="assistant", content=f"step {i}: my reasoning here",
+                              tool_calls=[core.ToolCall(str(i), tool_name, {"cmd": "x"})]))
+        evs.append(core.Event(role="tool", content=tool_out, name=tool_name,
+                              tool_call_id=str(i)))
+    return evs
+
+
+def check_compaction_cut_is_quantized_for_prompt_cache():
+    """The verbatim cut advances only every CUT_STRIDE events, not every turn: a cut
+    that moves each turn rewrites the synthetic summary each turn, invalidating the
+    provider's prompt cache for the whole prefix on every request. Appending a turn
+    within one stride must leave the already-sent prefix byte-identical."""
+    import context as context_mod
+
+    evs = _compaction_history(20)
+    view1 = context_mod.compact(evs, budget=1000, keep=6)
+    evs2 = evs + [core.Event(role="assistant", content="one more step"),
+                  core.Event(role="user", content="ok")]
+    view2 = context_mod.compact(evs2, budget=1000, keep=6)
+    # same stride block -> the condensed prefix (everything before the verbatim
+    # part) is unchanged, so the provider cache still matches
+    p1 = [e.content for e in view1 if e.role in ("system", "user")][:3]
+    p2 = [e.content for e in view2 if e.role in ("system", "user")][:3]
+    assert p1[0] == p2[0] and p1[1] == p2[1], "system/first must be stable"
+    s1 = next(e.content for e in view1 if (e.content or "").startswith(context_mod.MEMORY_MARK))
+    s2 = next(e.content for e in view2 if (e.content or "").startswith(context_mod.MEMORY_MARK))
+    assert s1 == s2, "summary must stay byte-identical within a stride (cache hysteresis)"
+    assert context_mod.CUT_STRIDE >= 4, "stride too small to help the prompt cache"
+
+
+def check_compaction_degrades_gradually_with_age():
+    """Fidelity falls with age instead of a verbatim/one-liner cliff: the youngest
+    dropped turns keep the assistant's own prose verbatim with tool outputs trimmed
+    to an outcome snippet (pairing intact), and only older turns condense to
+    one-line summaries."""
+    import context as context_mod
+
+    evs = _compaction_history(20, tool_out="exit=0\n" + "x" * 2000)
+    view = context_mod.compact(evs, budget=1000, keep=6)
+    trimmed = [e for e in view if e.role == "tool" and "[trimmed by compaction]" in (e.content or "")]
+    assert trimmed, "recent-window tool outputs must be trimmed, not dropped"
+    assert all(len(e.content) < 300 for e in trimmed)
+    assert all(e.content.startswith("exit=0") for e in trimmed), "outcome must survive the trim"
+    # every trimmed tool result still has its calling assistant step in the view
+    ids_seen = set()
+    for e in view:
+        if e.role == "assistant" and e.tool_calls:
+            ids_seen.update(tc.id for tc in e.tool_calls)
+        if e.role == "tool" and e.tool_call_id:
+            assert e.tool_call_id in ids_seen, "trimmed tool result lost its pairing"
+    # the recent window keeps MORE verbatim assistant steps than `keep` alone would
+    assert sum(1 for e in view if e.role == "assistant") > 3
+
+
+def check_compaction_pins_milestones():
+    """Calls to milestone tools (make_candidate / run_tests / request_promotion /
+    note_evolution_need) survive compaction as a pinned section no matter how old:
+    candidate names and test outcomes are session STATE - losing them makes the
+    model re-create candidates or re-request promotions it already made."""
+    import context as context_mod
+
+    evs = [core.Event(role="system", content="S"),
+           core.Event(role="user", content="task")]
+    evs.append(core.Event(role="assistant", content="creating candidate",
+                          tool_calls=[core.ToolCall("m1", "make_candidate",
+                                                    {"candidate": "v009-candidate"})]))
+    evs.append(core.Event(role="tool", content="Candidate created: v009-candidate",
+                          name="make_candidate", tool_call_id="m1"))
+    evs.append(core.Event(role="assistant", content="running tests",
+                          tool_calls=[core.ToolCall("m2", "run_tests", {})]))
+    evs.append(core.Event(role="tool", content="tests PASS (exit=0)",
+                          name="run_tests", tool_call_id="m2"))
+    for i in range(20):
+        evs.append(core.Event(role="assistant", content=f"step {i}",
+                              tool_calls=[core.ToolCall(f"s{i}", "shell", {"cmd": "x"})]))
+        evs.append(core.Event(role="tool", content="x" * 2000, name="shell",
+                              tool_call_id=f"s{i}"))
+    view = context_mod.compact(evs, budget=1000, keep=4)
+    body = next(e.content for e in view
+                if (e.content or "").startswith(context_mod.MEMORY_MARK))
+    assert "Milestones" in body, body
+    assert "make_candidate(candidate=v009-candidate)" in body, body
+    assert "tests PASS (exit=0)" in body, body
+    for name in ("make_candidate", "run_tests", "request_promotion", "note_evolution_need"):
+        assert name in context_mod.MILESTONE_TOOLS
+
+
+def check_context_budget_counts_tool_call_arguments():
+    """chars() weighs tool-call arguments, not just event content: a write_file call
+    can carry kilobytes in its `content` argument, and a budget that ignores them
+    undercounts what the provider actually renders."""
+    import context as context_mod
+
+    slim = [core.Event(role="assistant", content="w",
+                       tool_calls=[core.ToolCall("1", "write_file", {"path": "a"})])]
+    fat = [core.Event(role="assistant", content="w",
+                      tool_calls=[core.ToolCall("1", "write_file",
+                                                {"path": "a", "content": "z" * 5000})])]
+    assert context_mod.chars(fat) > context_mod.chars(slim) + 4000
+
+
+def check_note_lesson_journal_survives_sessions():
+    """EVA's episodic memory: note_lesson is a canonical tool whose insights land in
+    state/lessons.jsonl via agent.record_lesson, and lessons_summary surfaces them
+    (deduped, bounded) so FUTURE sessions inherit the experience. The journal is
+    best-effort: an empty lesson is refused by the tool but never crashes."""
+    import agent
+
+    names = [t.name for t in tools_mod.CANONICAL_TOOLS]
+    assert "note_lesson" in names, names
+
+    with tempfile.TemporaryDirectory() as d:
+        root = pathlib.Path(d)
+        saved = (agent.LESSONS, agent.STATE, agent.WORKSPACE, agent.RELEASES)
+        agent.STATE, agent.WORKSPACE = root, root / "workspace"
+        agent.RELEASES, agent.LESSONS = root / "releases", root / "lessons.jsonl"
+        try:
+            assert agent.lessons_summary() == "(none yet)"
+            agent.record_lesson("apt is unavailable in the safe sandbox", "environment", "work")
+            agent.record_lesson("apt is unavailable in the safe sandbox", "environment", "work")
+            agent.record_lesson("user prefers German replies", "user-preference", "work")
+            agent.record_lesson("", "self", "work")          # empty -> silently skipped
+            rows = [json.loads(x) for x in
+                    agent.LESSONS.read_text(encoding="utf-8").splitlines() if x.strip()]
+            assert len(rows) == 3 and rows[0]["category"] == "environment"
+            summary = agent.lessons_summary()
+            assert summary.count("apt is unavailable") == 1, summary   # deduped
+            assert "[user-preference] user prefers German replies" in summary
+            for _ in range(20):
+                agent.record_lesson(f"filler {_}", "self", "work")
+            assert len(agent.lessons_summary(limit=10).splitlines()) == 10  # bounded
+        finally:
+            (agent.LESSONS, agent.STATE, agent.WORKSPACE, agent.RELEASES) = saved
+
+    # the tool itself: echo observation confirms recording; empty lesson is refused
+    with tempfile.TemporaryDirectory() as ws:
+        rt = tools_mod.ShellToolRuntime(
+            workspace=pathlib.Path(ws),
+            approval=human_mod.ApprovalPolicy(human_mod.AutoHumanInterface(), mode="never"),
+            human=human_mod.AutoHumanInterface())
+        obs = rt.execute(core.ToolCall("1", "note_lesson",
+                                       {"lesson": "sed corrupts python files", "category": "approach"}),
+                         "work")
+        assert "lesson recorded" in obs.output.lower() and "sed corrupts" in obs.output
+        obs = rt.execute(core.ToolCall("2", "note_lesson", {"lesson": ""}), "work")
+        assert "denied" in obs.output.lower()
+
+    # retro guidance: the prompts tell EVA to journal durable insights
+    assert "note_lesson" in agent.WORK_SYSTEM
+    assert "note_lesson" in agent.IMPROVE_SYSTEM and "note_lesson" in agent.EVOLVE_SYSTEM
+
+
+def check_self_model_vitals_reports_experience():
+    """inspect_self('vitals') is EVA's self-TELEMETRY: a deterministic digest of its
+    lived experience (friction pressure, evolution outcomes including rejections,
+    lessons accumulated) derived from state/ - it must degrade gracefully when no
+    history exists and never crash."""
+    import self_model
+
+    orig_root = os.environ.get("ORGANISM_ROOT")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["ORGANISM_ROOT"] = td
+            text = self_model.lookup("vitals")
+            assert "0 promoted" in text and "friction recorded: none" in text, text
+            state = pathlib.Path(td) / "state"
+            state.mkdir()
+            (state / "backlog.jsonl").write_text(
+                json.dumps({"kind": "capability_gap", "signature": "gap:pdf-text"}) + "\n"
+                + json.dumps({"kind": "execution_error", "signature": "shell:x"}) + "\n"
+                + json.dumps({"kind": "resolved", "signature": "shell:x"}) + "\n",
+                encoding="utf-8")
+            (state / "release_ledger.jsonl").write_text(
+                json.dumps({"kind": "promoted", "parent": "releases/v001",
+                            "release": "releases/v002", "reason": "x"}) + "\n"
+                + json.dumps({"kind": "promotion_rejected", "candidate": "releases/v002-candidate",
+                              "reason": "gate failed"}) + "\n",
+                encoding="utf-8")
+            (state / "lessons.jsonl").write_text(
+                json.dumps({"lesson": "a", "category": "self"}) + "\n", encoding="utf-8")
+            for topic in ("vitals", "telemetry", "health"):
+                text = self_model.lookup(topic)
+                assert "1 promoted" in text and "1 rejected by gates" in text, text
+                assert "gap:pdf-text (1x)" in text, text
+                assert "shell:x" not in text.split("open friction")[1], text  # resolved
+                assert "1 durable insight" in text, text
+    finally:
+        if orig_root is None:
+            os.environ.pop("ORGANISM_ROOT", None)
+        else:
+            os.environ["ORGANISM_ROOT"] = orig_root
+
+
+def check_episodic_memory_digest_is_deterministic_and_task_focused():
+    """memory.digest distills a session into one compact episode: the user's TASK
+    (without the injected context block), tools used, files touched by writing tools,
+    and the final result (a finish summary wins over interim prose). A session with
+    no assistant activity leaves NO residue."""
+    import memory
+
+    events = [
+        core.Event(role="system", content="sys"),
+        core.Event(role="user", content="fix the sort bug\n\nMode: work\nRoot: /eva"),
+        core.Event(role="assistant", content="looking at it", tool_calls=[
+            core.ToolCall("1", "shell", {"cmd": "grep -n sort app.py"})]),
+        core.Event(role="tool", content="42: sort()", tool_call_id="1"),
+        core.Event(role="assistant", content="", tool_calls=[
+            core.ToolCall("2", "replace_in_file", {"path": "app.py", "old": "a", "new": "b"}),
+            core.ToolCall("3", "finish", {"summary": "fixed the comparator in app.py"})]),
+    ]
+    ep = memory.digest(events, "work", "finish")
+    assert ep["task"] == "fix the sort bug", ep          # context block stripped
+    assert ep["mode"] == "work" and ep["outcome"] == "finish"
+    assert ep["tools"] == {"shell": 1, "replace_in_file": 1, "finish": 1}, ep
+    assert ep["files"] == ["app.py"], ep
+    assert ep["result"] == "fixed the comparator in app.py", ep  # finish beats prose
+    assert memory.digest(events, "work", "finish") == ep         # deterministic
+    # nothing memorable -> no episode
+    assert memory.digest([core.Event(role="user", content="hi")], "work", None) is None
+
+
+def check_recall_searches_episodes_and_lessons_across_sessions():
+    """EVA's cross-session memory: record_episode persists digests to
+    state/episodes.jsonl (deduped by task on read - a re-exited resume does not
+    multiply); recall() finds past episodes AND lessons by keywords and reports an
+    honest miss; relevant() only surfaces STRONG matches for context injection.
+    The recall tool is canonical and works in read-only review mode."""
+    import memory
+
+    orig_root = os.environ.get("ORGANISM_ROOT")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["ORGANISM_ROOT"] = td
+            events = [
+                core.Event(role="user", content="refactor the parser module\n\nMode: work"),
+                core.Event(role="assistant", content="", tool_calls=[
+                    core.ToolCall("1", "write_file", {"path": "parser.py", "content": "x"}),
+                    core.ToolCall("2", "finish", {"summary": "split parser.py into lexer and grammar"})]),
+            ]
+            memory.record_episode(events, "work", "finish", release="v001")
+            memory.record_episode(events, "work", "finish", release="v001")  # resume re-exit
+            state = pathlib.Path(td) / "state"
+            assert len((state / "episodes.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+            (state / "lessons.jsonl").write_text(
+                json.dumps({"lesson": "the parser chokes on tabs", "category": "self"}) + "\n",
+                encoding="utf-8")
+
+            text = memory.recall("parser refactor")
+            assert text.count("refactor the parser module") == 1, text   # deduped
+            assert "parser.py" in text and "lexer and grammar" in text, text
+            assert "the parser chokes on tabs" in text, text             # lessons too
+            assert "nothing in memory" in memory.recall("quantum blockchain")
+            assert "state/sessions" in memory.recall("quantum blockchain")  # points deeper
+
+            # auto-injection is strict: strong match surfaces, weak match stays silent
+            assert "parser" in memory.relevant("refactor the parser again")
+            assert memory.relevant("write a haiku") == ""
+
+            # the tool: canonical, and usable even in read-only review mode
+            assert any(t.name == "recall" for t in tools_mod.CANONICAL_TOOLS)
+            with tempfile.TemporaryDirectory() as ws:
+                rt = tools_mod.ShellToolRuntime(
+                    workspace=pathlib.Path(ws),
+                    approval=human_mod.ApprovalPolicy(human_mod.AutoHumanInterface(), mode="never"),
+                    human=human_mod.AutoHumanInterface())
+                obs = rt.execute(core.ToolCall("1", "recall", {"query": "parser refactor"}), "review")
+                assert "parser.py" in obs.output, obs.output
+    finally:
+        if orig_root is None:
+            os.environ.pop("ORGANISM_ROOT", None)
+        else:
+            os.environ["ORGANISM_ROOT"] = orig_root
+
+
+def check_finish_retro_and_tags_become_semantic_memory():
+    """The finish tool is the semantic pen of episodic memory: its optional `retro`
+    (a reflection in the model's OWN words) and `tags` (self-chosen recall keys)
+    flow into the episode and are searchable - so recall finds a session by a
+    CONCEPT the model tagged, not only by verbatim task words."""
+    import memory
+    import tools as t
+
+    # the schema invites the model to leave semantic memory
+    props = t.FINISH_TOOL_DEF.input_schema["properties"]
+    assert "retro" in props and "tags" in props, props
+    assert "episodic memory" in t.FINISH_TOOL_DEF.description
+
+    events = [
+        core.Event(role="user", content="mach die ausgabe schoener\n\nMode: work"),
+        core.Event(role="assistant", content="", tool_calls=[
+            core.ToolCall("1", "finish", {
+                "summary": "rounded box around the recap",
+                "retro": "ANSI colors must stay TTY-gated or logs fill with escapes",
+                "tags": "TUI, Ansi-Colors , box-drawing,"})]),
+    ]
+    ep = memory.digest(events, "work", "finish")
+    assert ep["retro"].startswith("ANSI colors"), ep
+    assert ep["tags"] == ["tui", "ansi-colors", "box-drawing"], ep  # normalized
+
+    orig_root = os.environ.get("ORGANISM_ROOT")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["ORGANISM_ROOT"] = td
+            memory.record_episode(events, "work", "finish")
+            # found by TAG, a concept that appears nowhere in task or summary
+            text = memory.recall("box-drawing escapes")
+            assert "mach die ausgabe schoener" in text, text
+            assert "retro: ANSI colors" in text, text
+    finally:
+        if orig_root is None:
+            os.environ.pop("ORGANISM_ROOT", None)
+        else:
+            os.environ["ORGANISM_ROOT"] = orig_root
+
+
+def check_lineage_renders_failed_promotions_as_learning_signals():
+    """Rejected and declined promotions are part of EVA's BECOMING: lineage must render
+    them (with the candidate's reason) so EVA does not re-propose a change that gates
+    or the human already turned down."""
+    import self_model
+
+    orig_root = os.environ.get("ORGANISM_ROOT")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["ORGANISM_ROOT"] = td
+            state = pathlib.Path(td) / "state"
+            state.mkdir()
+            rows = [
+                {"kind": "promotion_rejected", "candidate": "releases/v002-candidate",
+                 "reason": "weakened a gate. More detail."},
+                {"kind": "promotion_declined", "candidate": "releases/v002-candidate",
+                 "reason": "human wanted a different approach"},
+            ]
+            (state / "release_ledger.jsonl").write_text(
+                "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+            text = self_model.lookup("lineage")
+            assert "v002-candidate REJECTED by gates: weakened a gate" in text, text
+            assert "More detail" not in text, text
+            assert "v002-candidate DECLINED by human: human wanted a different" in text, text
+    finally:
+        if orig_root is None:
+            os.environ.pop("ORGANISM_ROOT", None)
+        else:
+            os.environ["ORGANISM_ROOT"] = orig_root
+
+
 def check_blob_store_keeps_images_out_of_the_log():
     """Image attachments are stored on disk as small blob references
     (state/blobs/<sha256>), not fat inline data-URLs, and rehydrate to provider-neutral
@@ -2480,13 +2863,44 @@ def check_maxsteps_requests_continuation_in_every_attended_mode():
     import agent
 
     src = inspect.getsource(agent.run_mode)
-    assert "attended = not AUTO_YES" in src, "run_mode must know whether a human is present"
+    assert "attended = (not AUTO_YES) or" in src, "run_mode must know whether a human is present"
     # the continuation prompt is gated on attended (all modes), NOT on interactive
     seg = src.split('outcome == "maxsteps"', 1)[1]
     seg = seg.split("if not interactive:", 1)[0]
     assert "if attended:" in seg and "Keep working on this task?" in seg, seg
     assert "max_auto_continues" in seg, "autonomous runs must auto-continue (bounded)"
     assert agent.params.get("max_auto_continues") >= 1
+
+
+def check_attended_evolve_stays_conversational():
+    """An ATTENDED evolve run (no --yes: a human answers approval prompts) is a conversation like every other attended mode: when EVA ends a turn with a question, the human gets the next word instead of the session self-terminating. Only autonomous evolve (--yes) is a one-shot cycle. Attended evolve still seeds its own task (it picks the improvement; improve is the directed mode)."""
+    import inspect
+    import agent
+
+    src = inspect.getsource(agent.run_mode)
+    # interactive == attended: no mode subset may demote an attended run to one-shot.
+    inter = [ln for ln in src.splitlines() if ln.strip().startswith("interactive =")]
+    assert inter and inter[0].strip() == "interactive = attended", inter
+    # evolve never blocks at the initial prompt: it seeds its own default task.
+    seed_seg = src.split("if not resumed:", 1)[1].split("state.switched", 1)[0]
+    assert 'mode != "evolve"' in seed_seg, \
+        "evolve must seed its own task, not wait at the first prompt"
+
+
+def check_gate_output_is_quiet_on_success():
+    """Release gates must not flood the terminal: on SUCCESS each check command prints a one-line summary (full output only on failure or EVA_GATE_VERBOSE=1), and a passed candidate gate ends with a human-readable summary line - so the EVA conversation stays in scrollback and the human learns what was gated."""
+    import inspect
+    import supervisor
+
+    src = inspect.getsource(supervisor.run)
+    assert "EVA_GATE_VERBOSE" in inspect.getsource(supervisor._gate_verbose)
+    assert "_gate_verbose()" in src, "success output must be quiet unless verbose"
+    # failure keeps the FULL output - that is when it matters
+    assert "r.stdout" in src and "r.stderr" in src
+    gate = inspect.getsource(supervisor.candidate_gate)
+    assert "Gate summary:" in gate, "a passed gate must end with a summary"
+    promo = inspect.getsource(supervisor.handle_promotion_request)
+    assert '"reason"' in promo, "the promotion reason must be surfaced to the human"
 
 
 def check_improve_and_review_prompts_are_dialogic():
@@ -2509,6 +2923,33 @@ def check_prompts_request_visible_reasoning():
     for mode in ("work", "improve", "review", "evolve"):
         assert agent.THINK_ALOUD in agent.SYSTEMS[mode], \
             f"{mode} prompt must request visible reasoning"
+
+
+def check_env_prompts_teach_persistent_system_installs():
+    """Evolved skills with native deps (e.g. Playwright's browser libs) must survive the
+    ephemeral container: the FREE prompt must teach the state/system-deps.txt manifest
+    (kernel re-provisions at boot) and the persistent /eva/.local/lib LD_LIBRARY_PATH
+    shelf; the SAFE prompt must mention the lib shelf so libs installed in FREE are
+    usable in SAFE too. Seen live: a promoted browser skill whose apt deps vanished."""
+    import agent
+    free = agent.env_capabilities("free")
+    assert "system-deps.txt" in free, "FREE prompt must teach the system-deps manifest"
+    assert "/eva/.local/lib" in free and "LD_LIBRARY_PATH" in free
+    safe = agent.env_capabilities("safe")
+    assert "/eva/.local/lib" in safe and "LD_LIBRARY_PATH" in safe, \
+        "SAFE prompt must mention the persistent lib shelf"
+
+
+def check_promotion_request_hints_human_to_exit():
+    """After a promotion request the gates only run when the session ENDS - seen live
+    as a user sitting in an open prompt not knowing they must press Enter/exit. The
+    milestone handler must tell the human the next step."""
+    src = (pathlib.Path(__file__).parent / "agent.py").read_text(encoding="utf-8")
+    idx = src.find('"request_promotion" and out.startswith')
+    assert idx != -1, "request_promotion milestone handling must exist in agent.py"
+    window = src[idx:idx + 600]
+    assert "gates run on exit" in window, \
+        "promotion-requested milestone must hint the human to end the session"
 
 
 def check_tui_milestone_banner():
@@ -2628,7 +3069,7 @@ def check_adapters_retry_transient_model_errors():
         # transient (overloaded stream error, no HTTP code): retried until success
         calls = {"n": 0}
 
-        def flaky(sink):
+        def flaky(sink, think=None):
             calls["n"] += 1
             if calls["n"] < 3:
                 raise ad.ProviderError("anthropic stream error: Overloaded",
@@ -2647,7 +3088,7 @@ def check_adapters_retry_transient_model_errors():
         # non-transient: raises on the FIRST attempt (no retry)
         calls["n"] = 0
 
-        def broken(sink):
+        def broken(sink, think=None):
             calls["n"] += 1
             raise ad.ProviderError("HTTP 401: unauthorized", code=401)
 
@@ -2662,7 +3103,7 @@ def check_adapters_retry_transient_model_errors():
         calls["n"] = 0
         seen = []
 
-        def midstream(sink):
+        def midstream(sink, think=None):
             calls["n"] += 1
             sink("partial ")
             raise ad.ProviderError("anthropic stream error: Overloaded",
@@ -2674,6 +3115,23 @@ def check_adapters_retry_transient_model_errors():
         except ad.ProviderError:
             pass
         assert calls["n"] == 1 and seen == ["partial "]
+
+        # streamed REASONING counts too - a re-run would duplicate visible thoughts
+        calls["n"] = 0
+        thoughts = []
+
+        def midthink(sink, think=None):
+            calls["n"] += 1
+            think("mid-thought ")
+            raise ad.ProviderError("anthropic stream error: Overloaded",
+                                   code="overloaded_error")
+
+        try:
+            ad._call_with_retries(midthink, None, thoughts.append)
+            raise AssertionError("expected ProviderError")
+        except ad.ProviderError:
+            pass
+        assert calls["n"] == 1 and thoughts == ["mid-thought "]
     finally:
         ad.time.sleep = real_sleep
 
@@ -2827,6 +3285,207 @@ def check_loop_status_survives_compaction():
     clean = [e for e in evs if "[loop signal" not in (e.content or "")]
     view2 = context.compact(clean, budget=800, keep=4)
     assert all("LOOP STATUS" not in (e.content or "") for e in view2)
+
+
+def check_anthropic_extended_thinking_streams_and_replays():
+    """Extended thinking, both API generations: adaptive (Sonnet 5 / Opus 4.7+,
+    body carries {"type": "adaptive", "display": "summarized"}) and legacy budget
+    ({"type": "enabled", "budget_tokens": N} for <= *-4.5 models). Either way the
+    temperature is dropped, max_tokens gets headroom, streamed thinking_delta
+    fragments surface via on_think, the signed blocks land in ModelResult.meta,
+    and _render replays them verbatim on the LAST assistant turn only. Without
+    the opt-in the body stays thinking-free."""
+    sse = [
+        _sse({"type": "content_block_start", "index": 0,
+              "content_block": {"type": "thinking"}}),
+        _sse({"type": "content_block_delta", "index": 0,
+              "delta": {"type": "thinking_delta", "thinking": "let me "}}),
+        _sse({"type": "content_block_delta", "index": 0,
+              "delta": {"type": "thinking_delta", "thinking": "check"}}),
+        _sse({"type": "content_block_delta", "index": 0,
+              "delta": {"type": "signature_delta", "signature": "sig123"}}),
+        _sse({"type": "content_block_stop", "index": 0}),
+        _sse({"type": "content_block_start", "index": 1,
+              "content_block": {"type": "text"}}),
+        _sse({"type": "content_block_delta", "index": 1,
+              "delta": {"type": "text_delta", "text": "done"}}),
+        _sse({"type": "message_stop"}),
+    ]
+    captured = {}
+
+    def stream_transport(endpoint, body, headers):
+        captured["body"] = body
+        return iter(sse)
+
+    a = adapters.AnthropicAdapter(endpoint="x", model="m", api_key="k",
+                                  temperature=0.5, thinking_budget=2048,
+                                  stream_transport=stream_transport,
+                                  transport=lambda *x: {"content": []})
+    turn = core.AgentTurn(system="s", events=[core.Event(role="user", content="hi")],
+                          tools=tools_mod.CANONICAL_TOOLS, mode="work")
+    thoughts, chunks = [], []
+    res = a.run_turn(turn, on_delta=chunks.append, on_think=thoughts.append)
+    assert "".join(thoughts) == "let me check" and res.say == "done"
+    body = captured["body"]
+    assert body.get("thinking") == {"type": "enabled", "budget_tokens": 2048}
+    assert "temperature" not in body, "thinking requires default temperature"
+    assert body["max_tokens"] >= 2048 + 2048
+    blocks = res.meta.get("thinking_blocks")
+    assert blocks == [{"type": "thinking", "thinking": "let me check",
+                       "signature": "sig123"}]
+    # replay: signed blocks ride the event meta and reopen the LAST assistant turn
+    call = core.ToolCall(id="tu1", name="shell", arguments={"cmd": "ls"})
+    evs = [core.Event(role="user", content="hi"),
+           core.Event(role="assistant", content="old",
+                      meta={"thinking_blocks": blocks}),
+           core.Event(role="user", content="ok"),
+           core.Event(role="assistant", content="", tool_calls=[call],
+                      meta={"thinking_blocks": blocks}),
+           core.Event(role="tool", content="out", tool_call_id="tu1", name="shell")]
+    msgs = a._render(core.AgentTurn(system="s", events=evs,
+                                    tools=turn.tools, mode="work"))
+    rendered = [m for m in msgs if m["role"] == "assistant"]
+    assert rendered[-1]["content"][0]["type"] == "thinking"
+    assert rendered[-1]["content"][0]["signature"] == "sig123"
+    assert all(b.get("type") != "thinking" for b in rendered[0]["content"]), \
+        "only the last assistant turn replays thinking"
+    # unsigned blocks are filtered (a proxy may strip signatures)
+    assert a._thinking_blocks(core.Event(role="assistant", content="",
+        meta={"thinking_blocks": [{"type": "thinking", "thinking": "x"}]})) == []
+    # adaptive mode (current models): adaptive body param, summarized display so
+    # the reasoning text is not omitted, no budget_tokens, temperature dropped
+    a3 = adapters.AnthropicAdapter(endpoint="x", model="m", api_key="k",
+                                   temperature=0.5, thinking_adaptive=True,
+                                   stream_transport=stream_transport,
+                                   transport=lambda *x: {"content": []})
+    thoughts3: list = []
+    res3 = a3.run_turn(turn, on_delta=chunks.append, on_think=thoughts3.append)
+    assert "".join(thoughts3) == "let me check" and res3.say == "done"
+    body3 = captured["body"]
+    assert body3.get("thinking") == {"type": "adaptive", "display": "summarized"}
+    assert "budget_tokens" not in body3["thinking"]
+    assert "temperature" not in body3 and body3["max_tokens"] >= 8192
+    assert a3.identity().get("thinking") == "adaptive"
+    r3 = [m for m in a3._render(core.AgentTurn(system="s", events=evs,
+                                               tools=turn.tools, mode="work"))
+          if m["role"] == "assistant"]
+    assert r3[-1]["content"][0]["type"] == "thinking", \
+        "adaptive mode must replay signed thinking blocks too"
+    # env wiring: EVA_THINKING=1/adaptive -> adaptive; =budget -> legacy budget
+    env_base = {"EVA_PROVIDER": "anthropic", "EVA_MODEL": "m", "EVA_API_KEY": "k"}
+    m1 = adapters.make_adapter({**env_base, "EVA_THINKING": "1"})
+    assert m1.thinking_adaptive and m1.thinking_budget is None
+    m2 = adapters.make_adapter({**env_base, "EVA_THINKING": "budget",
+                                "EVA_THINKING_BUDGET": "4096"})
+    assert not m2.thinking_adaptive and m2.thinking_budget == 4096
+    # opt-out: no opt-in -> body stays free of the thinking param
+    b2 = adapters.AnthropicAdapter(endpoint="x", model="m", api_key="k",
+                                   temperature=0.5, stream_transport=stream_transport,
+                                   transport=lambda *x: {"content": []})
+    b2.run_turn(turn, on_delta=chunks.append)
+    assert "thinking" not in captured["body"]
+    assert captured["body"].get("temperature") == 0.5
+
+
+def check_openai_reasoning_content_streams_to_on_think():
+    """Reasoning models behind an OpenAI-compatible endpoint expose their thought
+    process as `reasoning_content` deltas - the adapter surfaces them via on_think,
+    kept strictly apart from the visible answer."""
+    sse = [
+        _sse({"choices": [{"delta": {"reasoning_content": "hmm "}}]}),
+        _sse({"choices": [{"delta": {"reasoning_content": "ok"}}]}),
+        _sse({"choices": [{"delta": {"content": "Answer"}}]}),
+        "data: [DONE]",
+    ]
+    a = adapters.OpenAIChatAdapter(endpoint="x", model="m", api_key="k",
+                                   tool_mode="native",
+                                   transport=lambda *x: {"choices": []},
+                                   stream_transport=lambda *x: iter(sse))
+    turn = core.AgentTurn(system="s", events=[core.Event(role="user", content="hi")],
+                          tools=tools_mod.CANONICAL_TOOLS, mode="work")
+    thoughts, chunks = [], []
+    res = a.run_turn(turn, on_delta=chunks.append, on_think=thoughts.append)
+    assert "".join(thoughts) == "hmm ok"
+    assert res.say == "Answer" and "hmm" not in res.say
+
+
+def check_cli_message_args_are_control_only():
+    """The mode CLI accepts CONTROL words only (resume [id], work --list): free
+    message text is noticed and ignored - a stray `improve resume <text>` can no
+    longer seed a fresh session over a resumable one. The programmatic task channel
+    is the --task flag (supervisor uses it for evolve/pivot tasks)."""
+    import contextlib
+    import inspect
+    import io
+    import agent
+
+    def quiet(mode, rest):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return agent._control_args(mode, rest)
+
+    assert quiet("improve", []) == ""
+    assert quiet("improve", ["resume"]) == "resume"
+    assert quiet("improve", ["resume", "do", "stuff"]) == "resume"
+    assert quiet("work", ["resume", "abc123"]) == "resume abc123"
+    assert quiet("work", ["--list"]) == "--list"
+    assert quiet("work", ["make", "me", "a", "thing"]) == ""
+    assert "--task" in inspect.getsource(agent.main)
+    sup = _release_text("supervisor.py")
+    assert "--task" in sup and "control" in sup
+
+
+def check_tui_renders_reasoning_stream():
+    """Streamed reasoning shows up dim under a one-time '∴ thinking' header and is
+    cleanly closed the moment the answer (or a tool call) takes over - the thought
+    text never leaks into the '● EVA' answer line. Newline-free paragraph reasoning
+    (the shape adaptive-thinking summaries stream in) soft-wraps at terminal width
+    and appears PROGRESSIVELY, not as one block at the end."""
+    import io
+    import tui
+    buf = io.StringIO()
+    view = tui.StatusView(mode="work", stream=buf, color=False)
+    view.on_think_delta("first insight\nsecond ")
+    view.on_think_delta("half\ntail")
+    view.on_say_delta("Answer")
+    view.say("Answer")
+    out = buf.getvalue()
+    assert out.count("\u2234 thinking") == 1
+    assert "first insight" in out and "second half" in out and "tail" in out
+    head = out.split("\u2234 thinking")[0]
+    assert "first insight" not in head
+    assert "● EVA" in out and out.index("tail") < out.index("● EVA")
+    # paragraph without newlines must surface while still streaming (soft wrap)
+    buf2 = io.StringIO()
+    v2 = tui.StatusView(mode="work", stream=buf2, color=False)
+    v2.on_think_delta("word " * 300)  # 1500 chars, no newline
+    assert "word" in buf2.getvalue(), "long newline-free reasoning must stream"
+    assert all(len(ln) <= 400 for ln in buf2.getvalue().splitlines()), \
+        "soft wrap keeps reasoning lines terminal-sized"
+    # dead time before the first token is bridged by a live waiting timer: agent
+    # starts it before each model call, and every real output path stops it.
+    assert callable(getattr(view, "model_waiting", None))
+    tui_src = _release_text("tui.py")
+    agent_src = _release_text("agent.py")
+    assert agent_src.count("view.model_waiting()") >= 2, \
+        "waiting timer must start before the first call AND after each observation"
+    for meth in ("on_think_delta", "on_say_delta", "say", "tool_call", "end_turn"):
+        body = tui_src.split(f"def {meth}(", 1)[1]
+        head = body.split("def ", 1)[0]
+        assert "_stop_spinner()" in head, f"{meth} must stop the waiting timer"
+    # on a real TTY, reasoning flows word by word (typewriter), not line drops:
+    # the flow helper exists and the delta path routes TTY output through it.
+    assert callable(getattr(view, "_think_flow", None)), \
+        "TTY reasoning must stream word by word via _think_flow"
+    delta_head = tui_src.split("def on_think_delta(", 1)[1].split("\n    def ", 1)[0]
+    assert "_think_flow(" in delta_head, \
+        "on_think_delta must route TTY output through the typewriter flow"
+    # ...and the ANSWER prose flows word by word on a TTY too (tables/fences
+    # still drop as complete blocks - typewriter would break box rendering).
+    assert callable(getattr(view, "_flow_words", None)), \
+        "TTY answer prose must stream word by word via _flow_words"
+    emit_head = tui_src.split("def _emit_line(", 1)[1].split("\n    def ", 1)[0]
+    assert "_flow_words(" in emit_head, \
+        "_emit_line must route TTY prose through the typewriter flow"
 
 
 def _all_checks():

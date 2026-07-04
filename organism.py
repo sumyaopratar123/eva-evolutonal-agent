@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 
@@ -25,6 +26,14 @@ KERNEL_LOG = STATE / "kernel_history.jsonl"
 # (parent -> release, why, when) is auditable and rollback can step back MORE than
 # one level instead of only to a single LAST_GOOD pointer.
 LEDGER = STATE / "release_ledger.jsonl"
+
+# Evolvable system-dependency manifest: one apt package name per line (comments with
+# '#'). The FREE sandbox is ephemeral (--rm), so apt installs vanish between sessions;
+# skills with native deps (e.g. a browser engine) would silently break next run. EVA
+# appends the packages a skill needs here (state/ persists), and the kernel re-
+# provisions them at every FREE start. With the apt cache bind-mounted (compose free
+# override), re-installs are seconds, not downloads.
+SYSTEM_DEPS = STATE / "system-deps.txt"
 
 # Evolution lock: a single-writer guard for the SHARED release store (runtime/
 # releases, CURRENT, LAST_GOOD, ledger). Only evolution-capable paths take it
@@ -265,13 +274,16 @@ def current_release():
 
 
 def run(cmd, release_path=None, timeout=180):
+    # Quiet on success (one summary line) so gate runs don't flood the terminal and
+    # push the conversation out of scrollback; FULL output on failure (that's when
+    # it matters) or with EVA_GATE_VERBOSE=1.
     env = os.environ.copy()
     env["ORGANISM_ROOT"] = str(ROOT)
 
     if release_path is not None:
         env["ACTIVE_RELEASE"] = str(release_path)
 
-    print("\n$", " ".join(map(str, cmd)))
+    print("$", " ".join(map(str, cmd)))
 
     r = subprocess.run(
         [str(x) for x in cmd],
@@ -282,12 +294,18 @@ def run(cmd, release_path=None, timeout=180):
         timeout=timeout,
     )
 
-    if r.stdout:
-        print(r.stdout)
-    if r.stderr:
-        print(r.stderr)
+    ok = r.returncode == 0
+    verbose = os.environ.get("EVA_GATE_VERBOSE", "").strip().lower() in ("1", "true", "yes", "on")
+    if ok and not verbose:
+        tail = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip()]
+        print("  ok" + (f" \u00b7 {tail[-1].strip()}" if tail else ""))
+    else:
+        if r.stdout:
+            print(r.stdout)
+        if r.stderr:
+            print(r.stderr)
 
-    return r.returncode == 0
+    return ok
 
 
 def kernel_capability_floor(path):
@@ -369,6 +387,52 @@ def _check_body_hash(text, name):
     return None
 
 
+def _is_substantive_check(node):
+    # A check function is "substantive" if its body (docstring aside) contains at
+    # least one of: a function call (executes code that can throw), a raise, or an
+    # assert whose condition references program state (a Name or Attribute inside
+    # the test expression). Degenerate bodies - `pass`, `assert True`,
+    # `assert 1 == 1` - contain none of these and fail. This is a floor against
+    # silent gutting, not a proof of semantic quality.
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr) and \
+            isinstance(getattr(body[0], "value", None), ast.Constant) and \
+            isinstance(body[0].value.value, str):
+        body = body[1:]
+    for stmt in body:
+        for x in ast.walk(stmt):
+            if isinstance(x, (ast.Call, ast.Raise)):
+                return True
+            if isinstance(x, ast.Assert) and any(
+                    isinstance(t, (ast.Name, ast.Attribute)) for t in ast.walk(x.test)):
+                return True
+    return False
+
+
+def substantive_test_floor(path):
+    # The count-ratchet proves a candidate runs no FEWER checks; the constitutional
+    # hashes pin a few check BODIES. This floor covers the gap in between: EVERY
+    # check_* function must contain real substance (see _is_substantive_check), so
+    # the ratchet count cannot be held up by hollowed-out checks. Deterministic,
+    # AST-based, LLM-free - and loose enough to never constrain what a check tests,
+    # only that it tests SOMETHING.
+    try:
+        text = (path / "tests.py").read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(text)
+    except Exception:
+        print("Kernel floor: cannot read/parse candidate tests.py")
+        return False
+    hollow = [node.name for node in ast.walk(tree)
+              if isinstance(node, ast.FunctionDef) and node.name.startswith("check_")
+              and not _is_substantive_check(node)]
+    if hollow:
+        print("Kernel floor: hollow checks (no call, no raise, no state-referencing assert):")
+        for name in hollow:
+            print("  -", name)
+        return False
+    return True
+
+
 def constitutional_test_floor(path):
     # Verify the candidate's constitutional check bodies match the kernel-pinned
     # hashes, so a security / identity / gate-integrity check cannot be silently
@@ -408,6 +472,9 @@ def kernel_gate(candidate_rel):
         return False
 
     if not constitutional_test_floor(path):
+        return False
+
+    if not substantive_test_floor(path):
         return False
 
     # Kernel-level floor. The active/evolved supervisor may have stronger gates,
@@ -494,12 +561,18 @@ def _promote_locked(auto_yes=False):
         print("Kernel rejected candidate.")
         PROMOTION.unlink()
         log("promotion_rejected", {"candidate": candidate, "reason": "kernel gate failed"})
+        # Learning signal for the agent's self-model (lineage/vitals): failed
+        # promotions belong in the ledger, not only in the kernel log.
+        ledger_append({"kind": "promotion_rejected", "candidate": candidate,
+                       "reason": reason})
         return False
 
     if not approve("Promote candidate after kernel gate?", auto_yes=auto_yes):
         print("Promotion declined.")
         PROMOTION.unlink()
         log("promotion_declined", {"candidate": candidate})
+        ledger_append({"kind": "promotion_declined", "candidate": candidate,
+                       "reason": reason})
         return False
 
     old_rel = CURRENT.read_text(encoding="utf-8").strip()
@@ -527,8 +600,44 @@ def _promote_locked(auto_yes=False):
                    "requested_by": req.get("requested_by"),
                    "supervisor_qualified": bool(req.get("supervisor_qualified"))})
     log("promoted", {"from": old_rel, "to": final_rel, "candidate": candidate, "reason": reason})
-    print("Promoted:", final_rel)
+    # End-of-evolution recap: after screens of gate output the human should not have
+    # to scroll back to learn WHAT was evolved and where they stand now.
+    gates = ("supervisor" + (" \u00b7 qualified" if req.get("supervisor_qualified") else "")
+             + " \u00b7 kernel floor \u00b7 all checks passed")
+    rows = [("promoted", f"{final_rel.rsplit('/', 1)[-1]}  (was {old_rel.rsplit('/', 1)[-1]})")]
+    if reason:
+        rows.append(("changed", reason[:500]))
+    rows.append(("gates", gates))
+    rows.append(("rollback", f"previous release kept as last_good \u2014 `organism.py rollback` restores it"))
+    print("\n" + _summary_box("\u2726 promoted", rows))
     return True
+
+
+def _summary_box(title, rows, width=76):
+    """Render labeled rows in a rounded box; ANSI-tinted only on a TTY."""
+    tty = sys.stdout.isatty()
+    dim = "\x1b[38;5;242m" if tty else ""
+    bold = "\x1b[1;32m" if tty else ""
+    label_c = "\x1b[38;5;108m" if tty else ""
+    rst = "\x1b[0m" if tty else ""
+    label_w = max(len(l) for l, _ in rows)
+    inner = width - 2
+    text_w = inner - label_w - 4
+    lines = []
+    for label, value in rows:
+        chunks = textwrap.wrap(value, text_w) or [""]
+        for i, chunk in enumerate(chunks):
+            lab = label if i == 0 else ""
+            pad = inner - 3 - label_w - len(chunk)
+            lines.append(f"{dim}\u2502{rst} {label_c}{lab:<{label_w}}{rst}  {chunk}"
+                         + " " * max(0, pad) + f"{dim}\u2502{rst}")
+    head = f" {title} "
+    side = (width - 2 - len(head)) // 2
+    bar = "\u2500"
+    top = (dim + "\u256d" + bar * side + rst + bold + head + rst
+           + dim + bar * (width - 2 - side - len(head)) + "\u256e" + rst)
+    bottom = dim + "\u2570" + bar * (width - 2) + "\u256f" + rst
+    return "\n".join([top] + lines + [bottom])
 
 
 def run_current_supervisor(args, auto_yes=False, allow_shell=False):
@@ -538,6 +647,12 @@ def run_current_supervisor(args, auto_yes=False, allow_shell=False):
     env = os.environ.copy()
     env["ORGANISM_ROOT"] = str(ROOT)
     env["ACTIVE_RELEASE"] = str(path)
+    # Persistent shared-library shelf for evolved skills' native deps (survives the
+    # ephemeral container; works even in SAFE). Injected ONLY into the agent child
+    # env - the kernel's own process must never load libs from an EVA-writable dir.
+    shelf = "/eva/.local/lib"
+    prior = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = shelf + (":" + prior if prior else "")
 
     if auto_yes:
         env["ORGANISM_AUTO_YES"] = "1"
@@ -616,8 +731,62 @@ def _rollback_locked():
     print("Rolled back to:", target)
 
 
+def provision_system_deps():
+    """FREE-sandbox boot provisioning: re-install the apt packages listed in
+    state/system-deps.txt so evolved skills with native deps survive the ephemeral
+    container. Best-effort - a broken package list must never block a session."""
+    if (os.environ.get("EVA_SANDBOX", "safe") or "safe").strip().lower() != "free":
+        return
+    if (os.environ.get("EVA_SYSTEM_DEPS", "") or "").strip() == "0":
+        return  # opt-out
+    if getattr(os, "geteuid", lambda: -1)() != 0:
+        return  # apt needs root; free override runs as root
+    try:
+        pkgs = [line.split("#", 1)[0].strip()
+                for line in SYSTEM_DEPS.read_text(encoding="utf-8").splitlines()]
+        pkgs = [p for p in pkgs if p and re.fullmatch(r"[a-z0-9][a-z0-9+.:~-]*", p)]
+    except FileNotFoundError:
+        return
+    except Exception as e:
+        print("(system-deps: unreadable, skipping:", e, ")")
+        return
+    if not pkgs:
+        return
+    print(f"(provisioning {len(pkgs)} system package(s) from state/system-deps.txt ...)")
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    # Keep downloaded .debs so the bind-mounted apt cache makes re-provisioning big
+    # packages a local re-install, not a re-download. The slim image's docker-clean
+    # hook force-deletes archives via DPkg::Post-Invoke - drop it (rootfs is writable
+    # and ephemeral in FREE, so this is per-session and harmless).
+    try:
+        os.remove("/etc/apt/apt.conf.d/docker-clean")
+    except OSError:
+        pass
+    apt = ["apt-get", "-o", "APT::Keep-Downloaded-Packages=true"]
+    try:
+        r = subprocess.run([*apt, "install", "-y", "--no-install-recommends", *pkgs],
+                           capture_output=True, text=True, timeout=600, env=env)
+        if r.returncode != 0:
+            # stale/missing package lists are the common cause -> update once, retry
+            subprocess.run([*apt, "update"], capture_output=True, text=True,
+                           timeout=300, env=env)
+            r = subprocess.run([*apt, "install", "-y", "--no-install-recommends", *pkgs],
+                               capture_output=True, text=True, timeout=600, env=env)
+        if r.returncode == 0:
+            print("(system deps ok)")
+        else:
+            tail = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
+            print("(system-deps install FAILED - continuing without:")
+            for line in tail:
+                print("   ", line)
+            print(" )")
+    except Exception as e:
+        print("(system-deps provisioning failed - continuing:", e, ")")
+
+
 def main():
     ensure_seed()
+    provision_system_deps()
 
     args = sys.argv[1:]
 
@@ -690,9 +859,9 @@ def main():
         return
 
     print("Usage:")
-    print("  python organism.py work [task]")
-    print("  python organism.py improve [task]")
-    print("  python organism.py review [task]")
+    print("  python organism.py work [resume [id] | --list]")
+    print("  python organism.py improve [resume]")
+    print("  python organism.py review [resume]")
     print("  python organism.py evolve --rounds N [--yes] [--allow-shell]")
     print("  python organism.py status")
     print("  python organism.py rollback [--force]")

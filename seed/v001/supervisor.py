@@ -46,20 +46,33 @@ def backlog_append(entry):
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _gate_verbose():
+    return os.environ.get("EVA_GATE_VERBOSE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def run(cmd, extra_env=None, timeout=180):
+    """Run a gate/check command. Quiet on success (one summary line) so dozens of
+    check commands don't flood the terminal and push the EVA conversation out of
+    scrollback; FULL output on failure (that's when it matters) or with
+    EVA_GATE_VERBOSE=1."""
     env = os.environ.copy()
     env["ORGANISM_ROOT"] = str(ROOT)
     env["ACTIVE_RELEASE"] = str(RELEASE)
     if extra_env:
         env.update(extra_env)
-    print("\n$", " ".join(map(str, cmd)))
+    print("$", " ".join(map(str, cmd)))
     r = subprocess.run([str(x) for x in cmd], cwd=ROOT, env=env,
                        capture_output=True, text=True, timeout=timeout)
-    if r.stdout:
-        print(r.stdout)
-    if r.stderr:
-        print(r.stderr)
-    return r.returncode == 0
+    ok = r.returncode == 0
+    if ok and not _gate_verbose():
+        tail = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip()]
+        print("  ok" + (f" \u00b7 {tail[-1].strip()}" if tail else ""))
+    else:
+        if r.stdout:
+            print(r.stdout)
+        if r.stderr:
+            print(r.stderr)
+    return ok
 
 
 def safe_release_rel(rel):
@@ -119,11 +132,17 @@ def gates_not_weakened(candidate_path):
     return True
 
 
-def run_agent(mode, task=None):
+def run_agent(mode, task=None, control=None):
+    """Launch the agent. `task` is the PROGRAMMATIC task channel (--task; used by
+    evolve/pivot). `control` carries the human CONTROL words from the CLI (resume
+    [id], --list) positionally - free message text there is noticed and ignored by
+    the agent; humans are prompted in the chat instead."""
     ensure_workspace()
     cmd = [sys.executable, str(RELEASE / "agent.py"), mode]
+    if control:
+        cmd += control.split()
     if task:
-        cmd.append(task)
+        cmd += ["--task", task]
     env = os.environ.copy()
     env["ORGANISM_ROOT"] = str(ROOT)
     env["ACTIVE_RELEASE"] = str(RELEASE)
@@ -216,6 +235,8 @@ def candidate_gate(candidate_rel, rounds=2):
         if not run([sys.executable, path / "supervisor.py", "--qualification-round", str(i)],
                    extra_env=env, timeout=180):
             return False
+    print(f"Gate summary: files ok \u00b7 test ratchet ok ({count_checks(path)} checks) \u00b7 "
+          f"{len(checks)} check commands \u00b7 {rounds} qualification rounds \u2014 all passed.")
     return True
 
 
@@ -225,6 +246,8 @@ def handle_promotion_request():
     req = json.loads(PROMOTION.read_text(encoding="utf-8"))
     candidate = req.get("candidate")
     print("\nPromotion requested:", candidate)
+    if req.get("reason"):
+        print("Reason:", str(req["reason"])[:500])
     if not candidate_gate(candidate, rounds=2):
         print("Supervisor rejected candidate.")
         PROMOTION.unlink()
@@ -307,15 +330,15 @@ def main():
     rest = " ".join(args[1:]).strip()
 
     if cmd == "work":
-        run_agent("work", rest or None)
+        run_agent("work", control=rest or None)
         handle_pivot_then_promotion()
         return
     if cmd == "improve":
-        run_agent("improve", rest or None)
+        run_agent("improve", control=rest or None)
         handle_promotion_request()
         return
     if cmd == "review":
-        run_agent("review", rest or None)
+        run_agent("review", control=rest or None)
         return
     if cmd == "evolve-one":
         evolve_one()

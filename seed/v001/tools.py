@@ -54,10 +54,18 @@ SHELL_TOOL = Tool(
 
 FINISH_TOOL_DEF = Tool(
     name="finish",
-    description="End the current turn with a short summary of what was done.",
+    description="End the current turn with a short summary of what was done. "
+                "Optionally leave SEMANTIC memory for your future self: `retro` is a "
+                "one-or-two-sentence reflection IN YOUR OWN WORDS (what this was really "
+                "about, what mattered, what you'd do differently) and `tags` is a short "
+                "comma-separated list of concepts/technologies for later recall. Both "
+                "flow into your episodic memory - write them for the EVA who will "
+                "search for this session weeks from now.",
     input_schema={
         "type": "object",
-        "properties": {"summary": {"type": "string"}},
+        "properties": {"summary": {"type": "string"},
+                       "retro": {"type": "string"},
+                       "tags": {"type": "string"}},
         "required": [],
     },
 )
@@ -220,6 +228,40 @@ NOTE_EVOLUTION_NEED_TOOL = Tool(
     },
 )
 
+NOTE_LESSON_TOOL = Tool(
+    name="note_lesson",
+    description="Record a DURABLE insight in your persistent lessons journal so future "
+                "sessions start with it: a failed approach and why, an environment quirk "
+                "(e.g. a missing library class), a user preference, or something learned "
+                "about your own code. Sessions die - lessons survive. Do NOT log routine "
+                "progress or task details; log only what would help a future you avoid a "
+                "mistake or a re-discovery. `category` is one of: approach | environment | "
+                "user-preference | self.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "lesson": {"type": "string"},
+            "category": {"type": "string"},
+        },
+        "required": ["lesson"],
+    },
+)
+
+RECALL_TOOL = Tool(
+    name="recall",
+    description="Search your cross-session memory: past session EPISODES (task, files "
+                "touched, outcome) and recorded LESSONS, matched by keywords. Use it "
+                "when a task feels familiar ('have I done something like this before?'), "
+                "before re-solving a problem, or to find which files an earlier session "
+                "changed. Deterministic keyword search - give task words, file names or "
+                "tool names as the query.",
+    input_schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+)
+
 MAKE_CANDIDATE_TOOL = Tool(
     name="make_candidate",
     description="Clone the ACTIVE release into a fresh *-candidate you can safely edit - the "
@@ -283,7 +325,8 @@ SET_PARAM_TOOL = Tool(
 CANONICAL_TOOLS: list[Tool] = [SHELL_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL,
                               REPLACE_IN_FILE_TOOL, APPLY_PATCH_TOOL, FETCH_URL_TOOL,
                               WEB_SEARCH_TOOL, INSPECT_SELF_TOOL, NOTE_EVOLUTION_NEED_TOOL,
-                              SET_PARAM_TOOL, FINISH_TOOL_DEF]
+                              NOTE_LESSON_TOOL, RECALL_TOOL, SET_PARAM_TOOL,
+                              FINISH_TOOL_DEF]
 # Extra tools available only when the agent may evolve the release: build a candidate,
 # run its tests, and request promotion.
 EVOLUTION_TOOLS: list[Tool] = CANONICAL_TOOLS + [MAKE_CANDIDATE_TOOL, RUN_TESTS_TOOL,
@@ -914,6 +957,32 @@ class ShellToolRuntime:
                                "is fine to just handle now; this is proposed as a real "
                                "skill only if the SAME need recurs.")
 
+    def _note_lesson(self, call: ToolCall, mode: str) -> ToolObservation:
+        # Presentation/echo only, like note_evolution_need: agent.py owns the lessons
+        # journal (state/lessons.jsonl) via its tool-call hook. Lessons are EVA's
+        # episodic memory across sessions - the store must outlive any one release
+        # conversation, so it lives in state/, not in the session log.
+        lesson = str(call.arguments.get("lesson", "") or "").strip()
+        if not lesson:
+            return ToolObservation(call.id, call.name,
+                                   "Denied: describe the insight in `lesson`.")
+        cat = str(call.arguments.get("category", "") or "").strip()
+        tag = f" [{cat}]" if cat else ""
+        return ToolObservation(call.id, call.name,
+                               f"Lesson recorded{tag}: {lesson[:200]}. It will be "
+                               "surfaced to future sessions.")
+
+    def _recall(self, call: ToolCall, mode: str) -> ToolObservation:
+        # Read-only cross-session memory retrieval, available in every mode.
+        # memory.py owns the scoring; failures degrade to an honest message.
+        query = str(call.arguments.get("query", "") or "").strip()
+        try:
+            import memory
+            return ToolObservation(call.id, call.name, memory.recall(query))
+        except Exception as exc:
+            return ToolObservation(call.id, call.name,
+                                   f"recall unavailable: {type(exc).__name__}: {exc}")
+
     def _inspect_self(self, call: ToolCall, mode: str) -> ToolObservation:
         # Read-only self-knowledge, available in every mode. EVA queries its own
         # anatomy/skills/capabilities on demand instead of being preloaded with them.
@@ -997,6 +1066,8 @@ class ShellToolRuntime:
         "make_candidate": _make_candidate,
         "run_tests": _run_tests,
         "note_evolution_need": _note_evolution_need,
+        "note_lesson": _note_lesson,
+        "recall": _recall,
         "inspect_self": _inspect_self,
         "set_param": _set_param,
         "request_promotion": _request_promotion,

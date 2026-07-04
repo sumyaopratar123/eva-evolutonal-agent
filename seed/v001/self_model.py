@@ -179,7 +179,8 @@ def brief(release: pathlib.Path | None = None) -> str:
         f"docs: read your own anatomy, {len(skills(release))} skills and "
         f"{len(capabilities(release))} ratchet-pinned capabilities ON DEMAND via the "
         f"inspect_self tool (topics: overview | anatomy | skills | capabilities | "
-        f"policy | sandbox | model | parameters | lineage | a filename | a capability name)."
+        f"policy | sandbox | model | parameters | lineage | vitals | a filename | "
+        f"a capability name)."
     )
 
 
@@ -287,8 +288,90 @@ def lineage(release: pathlib.Path | None = None, limit: int = 12) -> str:
                          + (f": {reason}" if reason else ""))
         elif kind == "rollback":
             lines.append(f"  - {_name(e.get('from'))} -> {_name(e.get('to'))} ROLLED BACK")
+        elif kind in ("promotion_rejected", "promotion_declined"):
+            # Failed promotions are LEARNING SIGNALS, not shame: seeing what was
+            # rejected (by gates) or declined (by the human) keeps EVA from
+            # re-proposing the same change and shows what the human did not want.
+            verb = "REJECTED by gates" if kind == "promotion_rejected" else "DECLINED by human"
+            reason = _first_sentence(str(e.get("reason", "")), 80)
+            lines.append(f"  - {_name(e.get('candidate'))} {verb}"
+                         + (f": {reason}" if reason else ""))
     if len(rows) > limit:
         lines.insert(1, f"  (... {len(rows) - limit} earlier entries omitted)")
+    return "\n".join(lines)
+
+
+def _read_jsonl(path: pathlib.Path | None) -> list[dict]:
+    rows: list[dict] = []
+    if not path or not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(rec, dict):
+            rows.append(rec)
+    return rows
+
+
+def vitals(release: pathlib.Path | None = None) -> str:
+    """EVA's self-telemetry: a deterministic, LLM-free digest of its own EXPERIENCE,
+    derived from the persistent state/ files. Where the rest of the self-model says
+    what EVA IS, vitals say how EVA has been DOING: friction pressure, evolution
+    outcomes (incl. rejections) and how much episodic memory it has accumulated."""
+    root = _organism_root()
+    state = (root / "state") if root else None
+    backlog = _read_jsonl(state / "backlog.jsonl" if state else None)
+    ledger = _read_jsonl(state / "release_ledger.jsonl" if state else None)
+    lessons = _read_jsonl(state / "lessons.jsonl" if state else None)
+    episodes = _read_jsonl(state / "episodes.jsonl" if state else None)
+
+    # friction: live signature counts (a 'resolved' record resets its signature)
+    counts: dict[str, int] = {}
+    kinds: dict[str, int] = {}
+    for rec in backlog:
+        sig = rec.get("signature")
+        kind = str(rec.get("kind") or "")
+        if sig:
+            if kind == "resolved":
+                counts[sig] = 0
+            else:
+                counts[sig] = counts.get(sig, 0) + 1
+        if kind and kind != "resolved":
+            kinds[kind] = kinds.get(kind, 0) + 1
+    live = sorted(((s, c) for s, c in counts.items() if c > 0), key=lambda x: -x[1])
+
+    outcomes = {"promoted": 0, "rollback": 0, "promotion_rejected": 0,
+                "promotion_declined": 0}
+    for rec in ledger:
+        k = str(rec.get("kind") or "")
+        if k in outcomes:
+            outcomes[k] += 1
+
+    lines = [f"Vitals (self-telemetry from state/; you are {version(release)}):"]
+    lines.append("  evolution outcomes: "
+                 f"{outcomes['promoted']} promoted, {outcomes['rollback']} rolled back, "
+                 f"{outcomes['promotion_rejected']} rejected by gates, "
+                 f"{outcomes['promotion_declined']} declined by human")
+    if kinds:
+        lines.append("  friction recorded: "
+                     + ", ".join(f"{v}x {k}" for k, v in sorted(kinds.items(), key=lambda x: -x[1])))
+    else:
+        lines.append("  friction recorded: none")
+    if live:
+        top = ", ".join(f"{s} ({c}x)" for s, c in live[:5])
+        lines.append(f"  open friction signatures: {len(live)} (top: {top})")
+    else:
+        lines.append("  open friction signatures: none")
+    lines.append(f"  lessons journal: {len(lessons)} durable insight(s) recorded")
+    lines.append(f"  episodic memory: {len(episodes)} past session(s) remembered "
+                 "(searchable via the recall tool)")
+    if not root:
+        lines.append("  (organism root unknown - telemetry may be incomplete)")
     return "\n".join(lines)
 
 
@@ -333,6 +416,8 @@ def lookup(topic: str | None = None, release: pathlib.Path | None = None) -> str
         return backend(release)
     if t in ("lineage", "history", "ledger", "evolution", "generations"):
         return lineage(release)
+    if t in ("vitals", "telemetry", "health", "experience", "stats"):
+        return vitals(release)
     return detail(topic or "", release)
 
 

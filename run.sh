@@ -433,9 +433,9 @@ Getting started:
   help                  Show this overview (in chat, type /help instead)
 
 Sessions (modes are chosen at launch):
-  work    [task]        Useful work in workspace/ (default mode)
-  improve [task]        Evolve a candidate release
-  review  [task]        Read-only inspection
+  work    [resume [id] | --list]   Useful work in workspace/ (default mode)
+  improve [resume]                 Evolve a candidate release
+  review  [resume]                 Read-only inspection
   evolve  [N] [flags]   Run N autonomous evolution rounds
   paste                 Save a clipboard screenshot into data/workspace/ (needs pngpaste/wl-paste/xclip)
 
@@ -452,7 +452,9 @@ Organism & sandbox:
 Sandbox mode:
   --free <command>      Run in the FREE sandbox (writable rootfs + root + apt) instead of
                         the default hardened SAFE sandbox. Lets EVA install system packages
-                        (e.g. browser libs). Bigger blast radius - use only when needed.
+                        (e.g. browser libs); packages EVA records in state/system-deps.txt
+                        are re-installed automatically at every free start (cached).
+                        Bigger blast radius - use only when needed.
                         e.g.  ./run.sh --free work
 
 Autonomous (no per-step approval; safe because Docker contains it):
