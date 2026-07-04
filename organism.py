@@ -661,13 +661,19 @@ def run_current_supervisor(args, auto_yes=False, allow_shell=False):
 
     print("\nActive release:", rel)
 
-    r = subprocess.call(
+    p = subprocess.Popen(
         [sys.executable, str(supervisor)] + list(args),
         cwd=ROOT,
         env=env,
     )
-
-    return r
+    while True:
+        try:
+            return p.wait()
+        except KeyboardInterrupt:
+            # Ctrl+C reaches the whole foreground group; the supervisor/agent below
+            # handle it as a graceful session end. Keep waiting so a pending
+            # promotion still gets gated (maybe_promote runs after this returns).
+            continue
 
 
 def parse_flag_value(args, flag, default):

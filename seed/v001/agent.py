@@ -680,7 +680,14 @@ def _prompt_user(view, commands=None, *, sticky=False):
     commands = commands or {}
     empties = 0
     while True:
-        line = view.ask(history_file=INPUT_HISTORY)
+        try:
+            line = view.ask(history_file=INPUT_HISTORY)
+        except KeyboardInterrupt:
+            # Ctrl+C at the prompt = "I'm done" - end the session GRACEFULLY so the
+            # normal shutdown path (episodic memory, resumable session, and above all
+            # the supervisor/kernel promotion gates) still runs. No traceback.
+            view.notice("interrupted - ending the session.")
+            return None
         s = (line or "").strip()
         if s.lower() in {"exit", "quit", "q", "bye"}:
             return None
@@ -1145,6 +1152,12 @@ def run_mode(mode: str, task: str):
             break
         # Interactive: even after a `finish` the human gets the next word - the
         # conversation continues until they leave (empty reply / exit).
+        # A pending promotion request only gets gated AFTER the session ends - repeat
+        # the next-step hint AT the prompt, where the human is actually looking (the
+        # one printed at request time scrolls away under the finish summary).
+        if (STATE / "promotion_request.json").exists():
+            view.hint("→ promotion pending: end the session (Enter/exit) - the "
+                      "supervisor & kernel gates run on exit, then YOU confirm [y/N].")
         reply = _prompt_user(view, commands, sticky=(mode == "improve"))
         if not reply:
             break
@@ -1255,7 +1268,13 @@ def main():
         mode, rest = "work", args
 
     task = forced_task if forced_task is not None else _control_args(mode, rest)
-    run_mode(mode, task)
+    try:
+        run_mode(mode, task)
+    except KeyboardInterrupt:
+        # Ctrl+C outside the prompt (mid-turn): end quietly instead of a traceback.
+        # The session store is already persisted turn-by-turn, so `resume` still works.
+        print("\ninterrupted - session ended (resume with: <mode> resume).")
+        raise SystemExit(130)
 
 
 if __name__ == "__main__":

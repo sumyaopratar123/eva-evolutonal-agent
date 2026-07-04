@@ -149,7 +149,15 @@ def run_agent(mode, task=None, control=None):
     print("\n$", " ".join(map(str, cmd)))
     # Inherit stdio: the agent is interactive (approvals, user prompts). Capturing
     # would hide prompts and block input.
-    return subprocess.call([str(x) for x in cmd], cwd=ROOT, env=env) == 0
+    p = subprocess.Popen([str(x) for x in cmd], cwd=ROOT, env=env)
+    while True:
+        try:
+            return p.wait() == 0
+        except KeyboardInterrupt:
+            # Ctrl+C hits the whole foreground group; the agent child handles it as
+            # a graceful session end. Keep waiting for it instead of dying with a
+            # traceback - so the promotion gates after this call STILL run.
+            continue
 
 
 def smoke():
