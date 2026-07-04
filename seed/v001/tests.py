@@ -2692,6 +2692,29 @@ def check_interactive_session_survives_model_error():
     assert "not interactive" in seg and "break" in seg
 
 
+def check_retry_backoff_honors_retry_after_and_jitters():
+    """The retry wait honours a server-sent Retry-After header when present (capped),
+    and otherwise adds jitter to the exponential base so many clients hitting an
+    overloaded provider do not retry in lock-step."""
+    import adapters as ad
+    # Retry-After header parsing: delta-seconds only, garbage -> None
+    assert ad._parse_retry_after("7") == 7.0
+    assert ad._parse_retry_after(" 2.5 ") == 2.5
+    assert ad._parse_retry_after("-1") is None
+    assert ad._parse_retry_after("soon") is None
+    assert ad._parse_retry_after(None) is None
+    # a hinted delay wins over the exponential base, but is bounded
+    hinted = ad.ProviderError("HTTP 429", code=429, retry_after=7.0)
+    assert ad._retry_delay(hinted, 2.0) == 7.0
+    huge = ad.ProviderError("HTTP 429", code=429, retry_after=9999.0)
+    assert ad._retry_delay(huge, 2.0) == 60.0
+    # without a hint: base <= wait <= base * 1.5 (jitter), and it actually varies
+    plain = ad.ProviderError("HTTP 503", code=503)
+    waits = {ad._retry_delay(plain, 8.0) for _ in range(64)}
+    assert all(8.0 <= w <= 12.0 for w in waits)
+    assert len(waits) > 1, "jitter must desynchronise retry delays"
+
+
 def _all_checks():
     return [v for k, v in sorted(globals().items())
             if k.startswith(("check_", "test_")) and callable(v)]

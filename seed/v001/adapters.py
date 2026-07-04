@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 import time
 import urllib.error
@@ -62,9 +63,10 @@ class ProviderError(RuntimeError):
     so the agent can show WHY a request was rejected (model name, unsupported
     parameter, wrong endpoint, quota, ...)."""
 
-    def __init__(self, message, *, code=None):
+    def __init__(self, message, *, code=None, retry_after=None):
         super().__init__(message)
         self.code = code
+        self.retry_after = retry_after  # seconds, from a Retry-After header (or None)
 
 
 _TRANSIENT_HTTP = {408, 409, 425, 429, 500, 502, 503, 504, 529}
@@ -83,6 +85,25 @@ def _is_transient(exc) -> bool:
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return True
     return isinstance(exc, urllib.error.URLError)
+
+
+def _parse_retry_after(value):
+    """Seconds from a Retry-After header (delta-seconds form only; None otherwise)."""
+    try:
+        secs = float(str(value).strip())
+        return secs if secs >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _retry_delay(exc, base: float) -> float:
+    """Wait time before the next attempt: honour the server's Retry-After when the
+    provider sent one, otherwise exponential base plus jitter (desynchronises
+    clients hammering an overloaded endpoint). Always bounded to 60s."""
+    hinted = getattr(exc, "retry_after", None)
+    if hinted is not None:
+        return min(float(hinted), 60.0)
+    return min(base + random.uniform(0, base * 0.5), 60.0)
 
 
 def _call_with_retries(once: Callable, on_delta) -> ModelResult:
@@ -108,9 +129,10 @@ def _call_with_retries(once: Callable, on_delta) -> ModelResult:
         except Exception as exc:
             if attempt >= retries or streamed["hit"] or not _is_transient(exc):
                 raise
+            wait = _retry_delay(exc, delay)
             sys.stderr.write(f"  ~ transient model error ({str(exc)[:90]}); "
-                             f"retrying in {delay:.0f}s ({attempt + 1}/{retries})\n")
-            time.sleep(delay)
+                             f"retrying in {wait:.0f}s ({attempt + 1}/{retries})\n")
+            time.sleep(wait)
             delay = min(delay * 2, 30.0)
     raise RuntimeError("unreachable")  # pragma: no cover
 
@@ -593,7 +615,8 @@ def _http_post_json(endpoint: str, body: dict, headers: dict) -> dict:
             detail = e.read().decode("utf-8", "replace")
         except Exception:
             detail = ""
-        raise ProviderError(f"HTTP {e.code}: {detail[:600]}", code=e.code) from None
+        raise ProviderError(f"HTTP {e.code}: {detail[:600]}", code=e.code,
+                            retry_after=_parse_retry_after(e.headers.get("Retry-After"))) from None
 
 
 def _http_post_stream(endpoint: str, body: dict, headers: dict):
@@ -613,7 +636,8 @@ def _http_post_stream(endpoint: str, body: dict, headers: dict):
             detail = e.read().decode("utf-8", "replace")
         except Exception:
             detail = ""
-        raise ProviderError(f"HTTP {e.code}: {detail[:600]}", code=e.code) from None
+        raise ProviderError(f"HTTP {e.code}: {detail[:600]}", code=e.code,
+                            retry_after=_parse_retry_after(e.headers.get("Retry-After"))) from None
     try:
         for raw in resp:
             yield raw.decode("utf-8", "replace").rstrip("\r\n")
