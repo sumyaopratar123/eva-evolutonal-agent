@@ -29,6 +29,7 @@ edit it.
 """
 from __future__ import annotations
 
+import hashlib
 import http.client
 import http.server
 import os
@@ -85,9 +86,11 @@ def _resolve_upstream() -> "tuple[str, dict]":
 
 
 def _mask(secret: str) -> str:
+    # never log key material - identify the credential by a short hash fingerprint
     if not secret:
         return "(missing)"
-    return secret[:4] + "..." + secret[-4:] if len(secret) > 8 else "(set)"
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:8]
+    return f"(set, sha256:{digest})"
 
 
 UPSTREAM, AUTH = _resolve_upstream()

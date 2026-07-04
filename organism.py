@@ -132,7 +132,7 @@ def acquire_evolution_lock(mode, force=False):
     refusal = None
     for _ in range(2):  # at most one reclaim-and-retry
         try:
-            fd = os.open(str(LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            fd = os.open(str(LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump({"mode": mode, "ts": time.time(), "pid": os.getpid()}, f)
             _lock_stop = threading.Event()
