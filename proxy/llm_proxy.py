@@ -43,6 +43,11 @@ BIND_PORT = int(os.environ.get("LLM_PROXY_PORT", "8484"))
 # Request headers forwarded upstream (lowercase). Everything else - including any
 # credential EVA sent - is dropped; the real credential is injected below.
 _FORWARD_REQ = {"content-type", "accept", "anthropic-version", "anthropic-beta"}
+# Extra provider-specific request headers can be whitelisted WITHOUT editing this
+# file: EVA_FORWARD_HEADERS="x-goog-user-project,openai-beta" in the host .env.
+_FORWARD_REQ |= {h.strip().lower()
+                 for h in os.environ.get("EVA_FORWARD_HEADERS", "").split(",")
+                 if h.strip()}
 # Response headers forwarded back (framing headers are recomputed by close-framing).
 _FORWARD_RESP = {"content-type", "retry-after", "x-request-id", "request-id",
                  "anthropic-ratelimit-requests-remaining"}
@@ -50,7 +55,11 @@ _FORWARD_RESP = {"content-type", "retry-after", "x-request-id", "request-id",
 
 def _resolve_upstream() -> "tuple[str, dict]":
     """Pin upstream endpoint + auth header from the sidecar's env, mirroring the
-    provider selection rules of EVA's adapter factory (adapters.make_adapter)."""
+    provider selection rules of EVA's adapter factory (adapters.make_adapter).
+
+    New providers with a different auth scheme need NO code change here: set
+    EVA_AUTH_HEADER (e.g. x-goog-api-key) and optionally EVA_AUTH_PREFIX in the
+    host .env; the raw key is then sent as '<header>: <prefix><key>'."""
     env = os.environ
     provider = (env.get("EVA_PROVIDER") or "openai_chat").strip().lower()
     if provider in ("anthropic", "claude", "anthropic_messages"):
@@ -59,12 +68,20 @@ def _resolve_upstream() -> "tuple[str, dict]":
             endpoint = "https://api.anthropic.com/v1/messages"
         key = (env.get("EVA_API_KEY") or env.get("ANTHROPIC_API_KEY")
                or env.get("LLM_API_KEY") or "")
-        return endpoint, {"x-api-key": key}
-    endpoint = (env.get("EVA_ENDPOINT") or env.get("LLM_ENDPOINT")
-                or "https://api.openai.com/v1/chat/completions").strip()
-    key = (env.get("EVA_API_KEY") or env.get("LLM_API_KEY")
-           or env.get("OPENAI_API_KEY") or "")
-    return endpoint, {"Authorization": f"Bearer {key}"}
+        default_hdr, default_prefix = "x-api-key", ""
+    else:
+        endpoint = (env.get("EVA_ENDPOINT") or env.get("LLM_ENDPOINT")
+                    or "https://api.openai.com/v1/chat/completions").strip()
+        key = (env.get("EVA_API_KEY") or env.get("LLM_API_KEY")
+               or env.get("OPENAI_API_KEY") or "")
+        default_hdr, default_prefix = "Authorization", "Bearer "
+    header = (env.get("EVA_AUTH_HEADER") or "").strip() or default_hdr
+    # empty counts as unset (docker compose passes "" for absent optional vars)
+    prefix = env.get("EVA_AUTH_PREFIX") or None
+    if prefix is None:
+        prefix = "Bearer " if header.lower() == "authorization" else (
+            default_prefix if header == default_hdr else "")
+    return endpoint, {header: prefix + key}
 
 
 def _mask(secret: str) -> str:

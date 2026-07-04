@@ -16,6 +16,10 @@
 # The endpoint path /v1/messages satisfies both adapters (anthropic requires a
 # .../messages suffix; openai_chat uses the URL verbatim) - the sidecar ignores
 # the path and always forwards to its pinned upstream.
+#
+# Provider extensibility WITHOUT touching proxy code: EVA may evolve adapters for
+# new providers freely; if one needs a different auth scheme, set EVA_AUTH_HEADER /
+# EVA_AUTH_PREFIX / EVA_FORWARD_HEADERS in .env (see .env.example section 7).
 
 services:
   llm-proxy:
@@ -57,6 +61,11 @@ services:
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       LLM_TIMEOUT: "${LLM_TIMEOUT:-}"
+      # Generic provider extensibility (no proxy code change needed): custom auth
+      # header/prefix and extra forwarded request headers for new providers.
+      EVA_AUTH_HEADER: "${EVA_AUTH_HEADER:-}"
+      EVA_AUTH_PREFIX: "${EVA_AUTH_PREFIX-}"
+      EVA_FORWARD_HEADERS: "${EVA_FORWARD_HEADERS:-}"
 
     healthcheck:
       test: ["CMD", "/usr/local/bin/python", "-c",
