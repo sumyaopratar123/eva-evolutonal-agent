@@ -2715,6 +2715,65 @@ def check_retry_backoff_honors_retry_after_and_jitters():
     assert len(waits) > 1, "jitter must desynchronise retry delays"
 
 
+def check_loop_signal_flags_semantic_near_repeats():
+    """A context-starved model loops SEMANTICALLY (overlapping reads / varied greps
+    against the same file) which the exact-repeat breaker cannot see. From the Nth
+    access to the same target in one turn-loop, the observation carries a visible
+    loop signal nudging the model to use what it has or raise history_budget."""
+    # target extraction: read_file path + path-like tokens in shell commands
+    t = core._call_targets(core.ToolCall(id="1", name="read_file",
+                                         arguments={"path": "a/agent.py"}))
+    assert t == ["a/agent.py"]
+    t = core._call_targets(core.ToolCall(
+        id="2", name="shell",
+        arguments={"cmd": 'grep -n "crash:" ../releases/v001/agent.py | head'}))
+    assert "../releases/v001/agent.py" in t
+    assert core._call_targets(core.ToolCall(id="3", name="finish",
+                                            arguments={})) == []
+
+    # end-to-end: 4 varied accesses to the SAME file -> the 4th obs carries the signal
+    class _Sess:
+        def __init__(self):
+            self._evs = []
+
+        def events(self):
+            return list(self._evs)
+
+        def append(self, ev):
+            self._evs.append(ev)
+
+    class _Adapter:
+        def __init__(self):
+            self.n = 0
+
+        def run_turn(self, turn, on_delta=None):
+            self.n += 1
+            if self.n > 4:
+                return core.ModelResult(say="done", final=True)
+            # varied args each step: the exact-repeat breaker must NOT trigger
+            call = core.ToolCall(id=str(self.n), name="read_file",
+                                 arguments={"path": "x/agent.py",
+                                            "max_chars": 100 * self.n})
+            return core.ModelResult(say="", tool_calls=[call])
+
+    class _Runtime:
+        def execute(self, call, mode):
+            return core.ToolObservation(call_id=call.id, name=call.name,
+                                        output=f"content {call.arguments}")
+
+    seen = []
+    out = core.run_agent_loop(
+        adapter=_Adapter(), runtime=_Runtime(), session=_Sess(), tools=[],
+        system="s", mode="work", max_steps=10,
+        on_observation=lambda o: seen.append(o.output))
+    assert out == "final"
+    assert core.LOOP_SIGNAL_THRESHOLD == 4
+    assert "loop signal" not in seen[2]          # 3rd access: still quiet
+    assert "loop signal" in seen[3]              # 4th access: nudged
+    assert "history_budget" in seen[3] and "x/agent.py" in seen[3]
+    assert seen[3].startswith("content")         # still executed, not blocked
+
+
 def _all_checks():
     return [v for k, v in sorted(globals().items())
             if k.startswith(("check_", "test_")) and callable(v)]

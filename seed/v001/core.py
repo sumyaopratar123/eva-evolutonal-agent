@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -178,6 +179,36 @@ def _call_key(call: ToolCall) -> str:
     return f"{call.name}:{args}"
 
 
+# Soft loop-detection signal: the hard breaker above only catches EXACT repeats,
+# but a context-starved model loops semantically - overlapping reads of the same
+# file, varied greps against the same target. From this many accesses to the SAME
+# target within one turn-loop, the (still executed) observation gets a visible
+# nudge: use what you have, write findings down, or raise history_budget.
+LOOP_SIGNAL_THRESHOLD = 4
+
+_LOOP_SIGNAL = (
+    "\n[loop signal: access #{n} to '{target}' this turn. If you are re-reading "
+    "because earlier findings are no longer visible, your compacted context may be "
+    "evicting them. State what you have already learned and proceed with it - or "
+    "raise the visible-history budget via set_param('history_budget', ...).]"
+)
+
+_PATH_TOKEN = re.compile(r"""["']?([~.\w-]*/[\w./*-]+|[\w.-]+\.[A-Za-z]{1,4})["']?""")
+
+
+def _call_targets(call: ToolCall) -> "list[str]":
+    """Coarse 'what is this call about' extraction: the path argument of read_file,
+    or path-like tokens inside a shell command. Empty for everything else."""
+    args = call.arguments or {}
+    if call.name == "read_file":
+        p = str(args.get("path", "") or "").strip()
+        return [p] if p else []
+    if call.name == "shell":
+        cmd = str(args.get("cmd", "") or "")
+        return sorted({m.group(1) for m in _PATH_TOKEN.finditer(cmd)})
+    return []
+
+
 def run_agent_loop(
     *,
     adapter: ModelAdapter,
@@ -218,6 +249,8 @@ def run_agent_loop(
     step = 0
     # (tool name + args) -> (output hash, identical-result count) for the repeat guard.
     repeat_seen: dict[str, tuple[str, int]] = {}
+    # target path -> access count for the soft loop-detection signal.
+    target_hits: dict[str, int] = {}
     for _ in range(max_steps):
         step += 1
         turn = AgentTurn(system=system, events=session.events(), tools=tools, mode=mode)
@@ -269,6 +302,16 @@ def run_agent_loop(
                     repeat_seen[key] = (digest, prev[1] + 1)
                 else:
                     repeat_seen[key] = (digest, 1)
+                # Soft loop signal for near-repeats the hard breaker cannot see.
+                for target in _call_targets(call):
+                    n = target_hits.get(target, 0) + 1
+                    target_hits[target] = n
+                    if n >= LOOP_SIGNAL_THRESHOLD:
+                        obs = ToolObservation(
+                            call_id=obs.call_id, name=obs.name,
+                            output=(obs.output or "")
+                            + _LOOP_SIGNAL.format(n=n, target=target))
+                        break
             tool_meta = {"ts": time.time(), "mode": mode, "step": step,
                          "kind": "tool", "tool": obs.name,
                          "tool_call_id": obs.call_id}
