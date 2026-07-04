@@ -38,8 +38,8 @@
     "prompt_audit.py": "opt-in prompt admission audit: deterministic prompt-surface diff + static rules + optional nonce-guarded LLM judge (sensor on promotion, never an anchor)"
   },
   "hashes": {
-    "adapters.py": "17a794aae89804e9c08157464e707e540673fd2dd27127f5bcd7112053466616",
-    "agent.py": "71e2d6704c2a32cd8dff6ca70d056c6e10da6f8d2ee464c29424abb9e312df4d",
+    "adapters.py": "bce37841835f091f1d3c04d48591c6ac2ebba138ca96918bc48a4e91288f5e6b",
+    "agent.py": "c6ffa9bedf07a1b6ce82854e00eb552a78da56092a24f25960028b718e24afa1",
     "context.py": "a813ce07a26d52c18e639985770e48f91030c37c03d590509bf4f6bbe43b75b0",
     "core.py": "3f65f6726148816ef27e6118e9b001f8da5b7dba8a0cedd1e2f707eeb60faf35",
     "evals.py": "ee3cf8d30a58d62e546ba8d6ff7f6a2162db7ed71f9bbf2ac6ac86c4f7913da9",

@@ -29,7 +29,7 @@ import urllib.request
 from typing import Callable
 
 import params
-from core import AgentTurn, Event, ModelResult, Tool, ToolCall
+from core import AgentTurn, ModelResult, Tool, ToolCall
 
 
 def _env_int(name, default):

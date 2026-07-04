@@ -608,7 +608,7 @@ def _promote_locked(auto_yes=False):
     if reason:
         rows.append(("changed", reason[:500]))
     rows.append(("gates", gates))
-    rows.append(("rollback", f"previous release kept as last_good \u2014 `organism.py rollback` restores it"))
+    rows.append(("rollback", "previous release kept as last_good \u2014 `organism.py rollback` restores it"))
     print("\n" + _summary_box("\u2726 promoted", rows))
     return True
 

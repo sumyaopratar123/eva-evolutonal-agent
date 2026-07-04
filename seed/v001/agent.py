@@ -28,7 +28,7 @@ from human import (ApprovalPolicy, AutoHumanInterface, CliHumanInterface,
 from session import SessionStore
 from self_model import brief as self_model_brief, render_full as self_model_full
 from tui import StatusView
-from tools import CANONICAL_TOOLS, EVOLUTION_TOOLS, FINISH_TOOL_DEF, ShellToolRuntime
+from tools import CANONICAL_TOOLS, EVOLUTION_TOOLS, ShellToolRuntime
 
 
 ROOT = pathlib.Path(os.environ.get("ORGANISM_ROOT", pathlib.Path.cwd())).resolve()
