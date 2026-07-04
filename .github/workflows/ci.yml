@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Fast, docker-free sanity: everything compiles, the seed manifest's pinned
+  # hashes match the genome files (the same integrity check the kernel enforces
+  # at boot - a mismatch here means `eva reseed` will refuse to start), and the
+  # host launcher scripts parse.
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile kernel, genome and scripts
+        run: python -m py_compile organism.py seed/v001/*.py scripts/*.py
+
+      - name: Verify seed manifest hashes (kernel boot check)
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib, sys
+          seed = pathlib.Path("seed/v001")
+          man = json.loads((seed / "manifest.json").read_text(encoding="utf-8"))
+          hashes = man.get("hashes") or {}
+          assert hashes, "seed manifest has no hashes"
+          bad = []
+          for name, expected in hashes.items():
+              f = seed / name
+              if not f.exists():
+                  bad.append(f"missing: {name}")
+                  continue
+              got = hashlib.sha256(f.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+              if got != expected:
+                  bad.append(f"hash mismatch: {name}")
+          if bad:
+              sys.exit("Seed integrity FAILED (update seed/v001/manifest.json):\n  "
+                       + "\n  ".join(bad))
+          print(f"seed integrity ok ({len(hashes)} files)")
+          PY
+
+      - name: Syntax-check launcher scripts
+        run: |
+          bash -n run.sh
+          pwsh -NoProfile -Command '$t=$null;$e=$null;[System.Management.Automation.Language.Parser]::ParseFile("$PWD/run.ps1",[ref]$t,[ref]$e)|Out-Null; if($e){$e; exit 1}; "run.ps1 ok"'
+
+  # The genome's own LLM-free ratchet suite (tests.py --self), run inside the
+  # real sandbox image so the Dockerfile is validated too - the same suite the
+  # supervisor and kernel gates run before any promotion.
+  genome-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sandbox image
+        run: docker build -t eva:ci .
+
+      - name: Run genome test suite in the image
+        run: |
+          docker run --rm --entrypoint sh eva:ci -c '
+            mkdir -p /tmp/o/runtime/releases /tmp/o/state /tmp/o/workspace &&
+            cp -r /eva/seed/v001 /tmp/o/runtime/releases/v001 &&
+            cd /tmp/o/runtime/releases/v001 &&
+            ORGANISM_ROOT=/tmp/o python tests.py --self'
