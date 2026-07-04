@@ -778,6 +778,14 @@ class StatusView:
         for line in lines:
             self._w(_paint(line, "magenta", "bold", color=self.color))
 
+    def hint(self, text: str) -> None:
+        """A dim one-line hint for the human (same contract as Prompt.hint, so callers
+        can hint on either view without caring which one they hold)."""
+        try:
+            self._w(_paint("  " + text, "gray", color=self.color))
+        except Exception:
+            pass
+
     def status(self, rows) -> None:
         """Render the /status one-glance state (list of (key, value) pairs)."""
         self._w(format_status(rows, color=self.color))

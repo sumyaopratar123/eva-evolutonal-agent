@@ -2052,14 +2052,18 @@ def check_prompt_warns_about_missing_optional_binaries():
     """The runtime environment prompt prevents repeated exit=127 friction by telling
     EVA that common utilities may be absent, to verify optional binaries before use,
     and to prefer known-available Python/Node fallbacks for HTTP and scripting.
+    Deterministic: checks BOTH sandbox variants explicitly (not the live
+    ENV_CAPABILITIES, which depends on EVA_SANDBOX and made this check fail -
+    and block every promotion - in the free sandbox).
     (Backport of a self-evolved v002 check.)"""
     import agent
 
-    env = agent.ENV_CAPABILITIES.lower()
-    assert "no curl/wget" in env
-    assert "python" in env and "node" in env
-    assert "not every common unix utility is installed" in env
-    assert "command -v" in env
+    for variant in ("safe", "free"):
+        env = agent.env_capabilities(variant).lower()
+        assert "no curl/wget" in env, variant
+        assert "python" in env and "node" in env, variant
+        assert "not every common unix utility is installed" in env, variant
+        assert "command -v" in env, variant
 
 
 def check_exact_mode_set_is_single_source_consistent():
