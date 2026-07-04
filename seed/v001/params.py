@@ -68,6 +68,10 @@ REGISTRY: dict[str, Param] = {
     "llm_timeout": Param(
         "LLM_TIMEOUT", 180, 10, 3600,
         "HTTP timeout in seconds for one model request (adapters.py)"),
+    "llm_retries": Param(
+        "EVA_LLM_RETRIES", 2, 0, 10,
+        "automatic retries (with backoff) on transient model errors such as "
+        "overload / rate limit / gateway hiccups (adapters.py)"),
 }
 
 

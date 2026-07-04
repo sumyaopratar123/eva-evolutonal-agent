@@ -2614,6 +2614,84 @@ def check_set_param_tool_is_gated_and_bounded():
             os.environ[p.env] = prev
 
 
+def check_adapters_retry_transient_model_errors():
+    """A transient provider failure (overload / rate limit / gateway hiccup) is retried
+    with backoff instead of failing the turn; non-transient errors raise immediately, and
+    a turn that already streamed partial text is never silently re-run."""
+    import adapters as ad
+    import params as params_mod
+    assert "llm_retries" in params_mod.REGISTRY
+
+    real_sleep = ad.time.sleep
+    ad.time.sleep = lambda *_: None
+    try:
+        # transient (overloaded stream error, no HTTP code): retried until success
+        calls = {"n": 0}
+
+        def flaky(sink):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise ad.ProviderError("anthropic stream error: Overloaded",
+                                       code="overloaded_error")
+            return core.ModelResult(say="ok", final=True)
+
+        r = ad._call_with_retries(flaky, None)
+        assert r.say == "ok" and calls["n"] == 3
+
+        # transient HTTP codes qualify; auth/validation never do
+        assert ad._is_transient(ad.ProviderError("HTTP 529: overloaded", code=529))
+        assert ad._is_transient(ad.ProviderError("HTTP 429: rate_limit", code=429))
+        assert not ad._is_transient(ad.ProviderError("HTTP 401: bad key", code=401))
+        assert not ad._is_transient(ad.ProviderError("HTTP 400: bad request", code=400))
+
+        # non-transient: raises on the FIRST attempt (no retry)
+        calls["n"] = 0
+
+        def broken(sink):
+            calls["n"] += 1
+            raise ad.ProviderError("HTTP 401: unauthorized", code=401)
+
+        try:
+            ad._call_with_retries(broken, None)
+            raise AssertionError("expected ProviderError")
+        except ad.ProviderError:
+            pass
+        assert calls["n"] == 1
+
+        # already-streamed partial output: NOT retried (would duplicate visible text)
+        calls["n"] = 0
+        seen = []
+
+        def midstream(sink):
+            calls["n"] += 1
+            sink("partial ")
+            raise ad.ProviderError("anthropic stream error: Overloaded",
+                                   code="overloaded_error")
+
+        try:
+            ad._call_with_retries(midstream, seen.append)
+            raise AssertionError("expected ProviderError")
+        except ad.ProviderError:
+            pass
+        assert calls["n"] == 1 and seen == ["partial "]
+    finally:
+        ad.time.sleep = real_sleep
+
+
+def check_interactive_session_survives_model_error():
+    """A model error that survives the adapter retries no longer kills an interactive
+    session: the human is told the session is intact and gets the prompt back, while
+    autonomous (non-interactive) runs still stop on error."""
+    src = (RELEASE / "agent.py").read_text(encoding="utf-8")
+    assert 'outcome == "error"' in src
+    # the old session-killing pattern is gone ...
+    assert 'pivoted["flag"] or outcome == "error"' not in src
+    # ... replaced by an interactive keep-alive with a visible notice
+    assert "session is intact" in src
+    seg = src.split('outcome == "error"', 1)[1][:700]
+    assert "not interactive" in seg and "break" in seg
+
+
 def _all_checks():
     return [v for k, v in sorted(globals().items())
             if k.startswith(("check_", "test_")) and callable(v)]

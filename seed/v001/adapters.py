@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Callable
 
+import params
 from core import AgentTurn, Event, ModelResult, Tool, ToolCall
 
 
@@ -62,6 +65,54 @@ class ProviderError(RuntimeError):
     def __init__(self, message, *, code=None):
         super().__init__(message)
         self.code = code
+
+
+_TRANSIENT_HTTP = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+
+
+def _is_transient(exc) -> bool:
+    """True for failures worth an automatic retry: overload, rate limits, gateway
+    hiccups, timeouts and dropped connections - never auth/validation errors."""
+    if isinstance(exc, ProviderError):
+        code = exc.code
+        if isinstance(code, int) and code in _TRANSIENT_HTTP:
+            return True
+        blob = f"{code} {exc}".lower()
+        return ("overloaded" in blob or "rate_limit" in blob or "rate limit" in blob
+                or "timeout" in blob or "temporarily" in blob)
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    return isinstance(exc, urllib.error.URLError)
+
+
+def _call_with_retries(once: Callable, on_delta) -> ModelResult:
+    """Run one model turn with bounded retries on TRANSIENT failures (llm_retries in
+    the parameter harness, exponential backoff). A turn that already streamed text to
+    the sink is NOT retried - the user saw partial output and a silent re-run would
+    duplicate it; that error propagates and the session-level handling takes over."""
+    try:
+        retries = int(params.get("llm_retries"))
+    except Exception:
+        retries = 2
+    delay = 2.0
+    for attempt in range(retries + 1):
+        streamed = {"hit": False}
+        if on_delta is None:
+            sink = None
+        else:
+            def sink(text, _s=streamed):
+                _s["hit"] = True
+                on_delta(text)
+        try:
+            return once(sink)
+        except Exception as exc:
+            if attempt >= retries or streamed["hit"] or not _is_transient(exc):
+                raise
+            sys.stderr.write(f"  ~ transient model error ({str(exc)[:90]}); "
+                             f"retrying in {delay:.0f}s ({attempt + 1}/{retries})\n")
+            time.sleep(delay)
+            delay = min(delay * 2, 30.0)
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 # --------------------------------------------------------------------------- #
@@ -297,6 +348,9 @@ class OpenAIChatAdapter:
         return messages
 
     def run_turn(self, turn: AgentTurn, on_delta=None) -> ModelResult:
+        return _call_with_retries(lambda sink: self._run_turn_once(turn, sink), on_delta)
+
+    def _run_turn_once(self, turn: AgentTurn, on_delta=None) -> ModelResult:
         self._step += 1
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -470,6 +524,9 @@ class AnthropicAdapter:
         return messages
 
     def run_turn(self, turn: AgentTurn, on_delta=None) -> ModelResult:
+        return _call_with_retries(lambda sink: self._run_turn_once(turn, sink), on_delta)
+
+    def _run_turn_once(self, turn: AgentTurn, on_delta=None) -> ModelResult:
         self._step += 1
         headers = {
             "x-api-key": self.api_key,

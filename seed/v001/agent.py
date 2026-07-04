@@ -971,8 +971,19 @@ def run_mode(mode: str, task: str):
         )
         view.end_turn()
 
-        if pivoted["flag"] or outcome == "error":
+        if pivoted["flag"]:
             break
+
+        if outcome == "error":
+            # A model/transport failure that survived the adapter's own retries. It
+            # used to kill the whole interactive session (context gone, resume-only
+            # recovery). Interactive modes now keep the conversation alive: tell the
+            # human and fall through to the normal prompt - their next message simply
+            # re-runs against the intact session log. Autonomous runs still stop.
+            if not interactive:
+                break
+            view.notice("model error - your session is intact; just send the next "
+                        "message to retry (empty line or exit leaves).")
 
         if outcome == "maxsteps":
             # Ran the whole step budget without finishing. This used to end SILENTLY
