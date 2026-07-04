@@ -376,9 +376,10 @@ eva                    # first run: a short wizard sets up provider → model �
       <code>apt</code> — bigger blast radius, still contained and ephemeral. EVA is told its
       sandbox tier (<code>EVA_SANDBOX</code>), so in safe mode it recognises a system-library
       need as an <em>image need</em> and stops instead of thrashing <code>apt</code>.</p></div>
-    <div class="card r"><span class="ic">🔑</span><h4>Key-guard sidecar <em>(opt-in)</em></h4>
-      <p>By default the LLM API key sits in EVA's environment — readable by an agent with a
-      shell. With <code>EVA_KEYGUARD=1</code>, a tiny stdlib-only proxy sidecar is the
+    <div class="card r"><span class="ic">🔑</span><h4>Key-guard sidecar <em>(on by default)</em></h4>
+      <p>Without the guard the LLM API key sits in EVA's environment — readable by an agent
+      with a shell. With key-guard (default; <code>EVA_KEYGUARD=0</code> opts out), a tiny
+      stdlib-only proxy sidecar is the
       <b>only</b> container holding the key: EVA gets every key variable blanked and talks to
       the sidecar, which pins its upstream at startup (not an open relay) and injects the
       credential. Prevents key <em>theft</em>, not key <em>use</em> — put spend limits on the

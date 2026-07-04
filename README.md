@@ -54,8 +54,8 @@ you'd call "the agent" — loop, tools, adapters, memory, self-model, TUI — is
   land in a persistent backlog. New skills are *earned from what you actually keep
   asking for*, not designed up front.
 - **Contained, not "safe"** — hardened container (non-root, read-only rootfs, caps
-  dropped, resource limits), optional **key-guard sidecar** so the API key never enters
-  EVA's container, opt-in prompt-injection spotlighting, human-in-the-loop approvals.
+  dropped, resource limits), **key-guard sidecar** (on by default) so the API key never
+  enters EVA's container, opt-in prompt-injection spotlighting, human-in-the-loop approvals.
 
 **EVA improving itself** — a real, unedited 3-minute session: asked to *"give yourself a
 soul"*, EVA creates a candidate, writes `soul.md`, protects it with a new ratchet check,

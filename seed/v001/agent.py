@@ -22,6 +22,7 @@ import time
 
 from core import Event, run_agent_loop
 from adapters import make_adapter, FakeAdapter, llm_error_signature, spotlight_enabled
+import params
 from human import (ApprovalPolicy, AutoHumanInterface, CliHumanInterface,
                    extract_image_attachments)
 from session import SessionStore
@@ -59,9 +60,10 @@ ALLOW_SHELL = os.environ.get("ORGANISM_ALLOW_SHELL") == "1"
 # Stream assistant text token-by-token (live typing) when the adapter supports it.
 # On by default; only free text is streamed - tool calls are still shown whole.
 STREAM = os.environ.get("EVA_STREAM", "1").strip().lower() not in ("0", "false", "no", "off")
-PIVOT_THRESHOLD = _env_int("ORGANISM_PIVOT_THRESHOLD", 3)
-HISTORY_BUDGET = _env_int("ORGANISM_HISTORY_BUDGET", 24000)
-HISTORY_KEEP = _env_int("ORGANISM_HISTORY_KEEP", 8)
+# Tunable numbers (history budget/keep, step limits, pivot threshold, ...) live in
+# the params registry - EVA can SEE them via inspect_self("parameters") and adjust
+# them session-scoped via set_param. They are read LIVE at each use site below
+# (params.get), never frozen at import time.
 
 MODES = {"work", "improve", "review", "evolve"}
 
@@ -104,7 +106,9 @@ Do useful work for the user inside the workspace.
   explanation inside a finish summary."""
 
 IMPROVE_SYSTEM = """You are the evolution agent of EVA, running in DIRECTED mode.
-You have ONE concrete TASK; implement EXACTLY that - nothing else.
+This is a CONVERSATION with the user about improving your own code - the same
+dialogue as work mode, just with self-modification rights. The user gives you a
+concrete change; implement exactly that - and stay responsive to them throughout.
 - EVA's modes are EXACTLY: work, improve, review, evolve. Never invent others.
 - Your shell runs in the workspace dir. The releases live ONE LEVEL UP at
   ../runtime/releases/. Create your candidate with the make_candidate tool (it clones
@@ -142,8 +146,9 @@ run the candidate's tests with run_tests and only promote if they pass. Strength
 when you fix a friction class. Never weaken gates; organism.py is off-limits."""
 
 REVIEW_SYSTEM = """You are the review agent of EVA.
-Inspect and explain the workspace / release using read-only shell only. Do not
-change anything. Give clear risk notes and next steps, then finish.
+This is a CONVERSATION with the user about inspecting your code and workspace -
+the same dialogue as work mode, just read-only. Inspect and explain what they ask
+about; do not change anything. Give clear risk notes and next steps.
 - Read-only shell may DISCARD output to /dev/null (e.g. `find . 2>/dev/null`) and pipe
   read-only commands - use ls/find/wc/grep/sed/cat freely to LIST and inspect.
 - Do NOT claim a release diff or changelog you have not actually verified. To report what
@@ -189,11 +194,38 @@ call in THIS turn - never say you "will" do something and then stop. NEVER claim
 action (edit, test run, promotion) happened unless you actually called the tool for
 it. Keep chaining tool calls until the task is genuinely done, then finish."""
 
+# Anti-robot: modes with a human present are CONVERSATIONS, not batch jobs. Without
+# this, models grind through their plan, ignore digressions and fire approval after
+# approval without a word of dialogue.
+DIALOG = """Dialogue, not batch mode: the human is IN this conversation and their
+messages steer you.
+- If the user asks a question, digresses or makes small talk, ANSWER it directly in
+  a plain reply (no tool) - never push on with your previous plan as if they had
+  said nothing, and never answer a question by just trying another command.
+- When an approval is DECLINED or comes back with feedback, that feedback IS the
+  user's next instruction: respond to it in words and adapt your approach - do not
+  silently retry the same or a slightly different command.
+- If you need information or a decision, ASK in a plain reply (no tool); your turn
+  ends and the conversation continues. Don't guess, and don't chain approval
+  requests as a substitute for asking.
+- Between meaningful steps, say briefly what you found and what you'll do next, so
+  the human can steer you before the next action - not after five of them."""
+
+# Reasoning visibility: a silent volley of tool calls is invisible reasoning. One
+# short spoken line per step makes EVA's thinking legible in the TUI at ~zero cost.
+THINK_ALOUD = """Think out loud, briefly: whenever you call tools, START your message
+with ONE short line of visible reasoning - what you are about to do and why (e.g.
+"Tests pass - promoting the candidate."). The human watches you live; a tool call
+without a rationale line is invisible reasoning. One sentence, not an essay."""
+
 SYSTEMS = {
-    "work": IDENTITY + "\n\n" + WORK_SYSTEM + "\n\n" + ACTION_DISCIPLINE,
-    "improve": IDENTITY + "\n\n" + IMPROVE_SYSTEM + "\n\n" + SELF_MODEL + "\n\n" + ACTION_DISCIPLINE,
-    "evolve": IDENTITY + "\n\n" + EVOLVE_SYSTEM + "\n\n" + SELF_MODEL + "\n\n" + ACTION_DISCIPLINE,
-    "review": IDENTITY + "\n\n" + REVIEW_SYSTEM,
+    "work": IDENTITY + "\n\n" + WORK_SYSTEM + "\n\n" + DIALOG + "\n\n"
+            + ACTION_DISCIPLINE + "\n\n" + THINK_ALOUD,
+    "improve": IDENTITY + "\n\n" + IMPROVE_SYSTEM + "\n\n" + DIALOG + "\n\n"
+               + SELF_MODEL + "\n\n" + ACTION_DISCIPLINE + "\n\n" + THINK_ALOUD,
+    "evolve": IDENTITY + "\n\n" + EVOLVE_SYSTEM + "\n\n" + SELF_MODEL + "\n\n"
+              + ACTION_DISCIPLINE + "\n\n" + THINK_ALOUD,
+    "review": IDENTITY + "\n\n" + REVIEW_SYSTEM + "\n\n" + DIALOG + "\n\n" + THINK_ALOUD,
 }
 
 
@@ -545,7 +577,7 @@ def maybe_pivot(signature: str, mode: str, human, *, kind: str = "friction") -> 
     never fires."""
     if mode != "work" or PIVOT_REQUEST.exists():
         return False
-    if backlog_count(signature) < PIVOT_THRESHOLD:
+    if backlog_count(signature) < params.get("pivot_threshold"):
         return False
     if kind == "capability_gap":
         print(f"\nRecurring need: '{signature}'.")
@@ -770,7 +802,11 @@ def run_mode(mode: str, task: str):
     runtime.set_progress(view.tool_running)
 
     system = system_for(mode, session.path)
-    interactive = (not AUTO_YES) and mode in {"work", "improve", "review"}
+    # attended: a human is at the console (all approvals flow through them) - true
+    # for EVERY mode without --yes, including evolve. interactive additionally means
+    # the conversation continues after a finish (evolve ends per cycle instead).
+    attended = not AUTO_YES
+    interactive = attended and mode in {"work", "improve", "review"}
 
     # Mutable interactive state + the in-chat commands that act on it: /model and /provider
     # rebuild the adapter; /resume switches the active work session. Available at EVERY prompt
@@ -858,7 +894,7 @@ def run_mode(mode: str, task: str):
         # Make the memory VISIBLE the moment it forms: a dim one-liner with the
         # recurrence count against the pivot threshold, so the eventual pivot prompt
         # never comes out of nowhere.
-        view.notice(f"noted: {sig}  ({backlog_count(sig)}/{PIVOT_THRESHOLD} \u2192 pivot)")
+        view.notice(f"noted: {sig}  ({backlog_count(sig)}/{params.get('pivot_threshold')} \u2192 pivot)")
 
     def on_tool_call(call):
         view.tool_call(call)
@@ -872,6 +908,16 @@ def run_mode(mode: str, task: str):
 
     def on_observation(obs):
         view.observation(obs)
+        # Evolution milestones: make the lifecycle of a self-modification visible in
+        # the TUI the moment it happens (candidate born / gate passed / promotion
+        # requested), instead of burying it in scrolling tool output.
+        out = obs.output or ""
+        if obs.name == "make_candidate" and out.startswith("Created candidate"):
+            view.milestone("candidate created", out.split(".")[0])
+        elif obs.name == "run_tests" and out.startswith("tests PASS"):
+            view.milestone("tests PASS", out.splitlines()[0])
+        elif obs.name == "request_promotion" and out.startswith("Promotion requested"):
+            view.milestone("promotion requested", out.split(".")[0])
         if obs.name == "shell":
             sig = record_shell_friction(obs.output, mode)
             if sig:
@@ -892,6 +938,7 @@ def run_mode(mode: str, task: str):
     # `outcome` must survive an early break (e.g. an empty reply at the first
     # resume prompt runs no loop at all) - the post-loop cleanup reads it.
     outcome = None
+    auto_continues = 0
 
     while True:
         # On an interactive RESUME there is no new task yet: let the human read the
@@ -909,7 +956,9 @@ def run_mode(mode: str, task: str):
         outcome = run_agent_loop(
             adapter=state.adapter,
             runtime=runtime,
-            session=_CompactSession(state.session, HISTORY_BUDGET, HISTORY_KEEP),
+            session=_CompactSession(state.session, params.get("history_budget"),
+                                    params.get("history_keep")),
+            max_steps=params.get("max_steps"),
             tools=tools_for(mode),
             system=state.system,
             mode=mode,
@@ -926,15 +975,22 @@ def run_mode(mode: str, task: str):
             break
 
         if outcome == "maxsteps":
-            # Ran the whole step budget without finishing. This used to end SILENTLY (looking
-            # like "done"); surface it, and if there's a human let them decide to keep going
-            # (continue re-runs another batch on the same session - no new instruction needed).
+            # Ran the whole step budget without finishing. This used to end SILENTLY
+            # (looking like "done"). Any ATTENDED mode - evolve included - asks the
+            # human whether to keep going (continue re-runs another batch on the same
+            # session); an autonomous run auto-continues a bounded number of times.
             view.notice("reached the step limit without finishing this turn.")
-            if not interactive:
-                break
-            if not human.confirm("Keep working on this task?"):
-                break
-            continue
+            if attended:
+                if not human.confirm("Keep working on this task?"):
+                    break
+                continue
+            if auto_continues < params.get("max_auto_continues"):
+                auto_continues += 1
+                view.notice("autonomous run: continuing automatically "
+                            f"({auto_continues}/{params.get('max_auto_continues')}).")
+                continue
+            view.notice("autonomous run: step budget exhausted - stopping this cycle.")
+            break
 
         if not interactive:
             break

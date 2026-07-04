@@ -1,7 +1,8 @@
-# EVA key-guard overlay (opt-in): keep LLM API keys OUT of EVA's container.
+# EVA key-guard overlay (ON by default): keep LLM API keys OUT of EVA's container.
 #
-# Enable with EVA_KEYGUARD=1 in .env (the run.ps1 / run.sh wrappers pick it up),
-# or manually:  docker compose -f docker-compose.yml -f docker-compose.keyguard.yml run --rm eva work
+# The run.ps1 / run.sh wrappers layer this file automatically; opt out with
+# EVA_KEYGUARD=0 in .env. Manual use:
+#   docker compose -f docker-compose.yml -f docker-compose.keyguard.yml run --rm eva work
 #
 # How it works: a tiny sidecar container (same eva image, stdlib-only script,
 # proxy/llm_proxy.py) is the ONLY place the real API key exists. EVA's container

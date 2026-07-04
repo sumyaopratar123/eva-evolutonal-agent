@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from core import Tool, ToolCall, ToolObservation
 from human import (ApprovalPolicy, HumanInterface, RISK_NONE, RISK_PROMOTE,
                    RISK_SHELL, RISK_WRITE)
+import params
 import self_model
 
 
@@ -67,9 +68,10 @@ INSPECT_SELF_TOOL = Tool(
                 "and are not preloaded with full docs. Returns your anatomy "
                 "(file->role), skills (tools), ratchet-pinned capabilities, the "
                 "per-mode security policy, the current sandbox (safe/free), your live "
-                "model/provider backend, or your evolution lineage (promotions/rollbacks "
-                "from the release ledger). `topic` selects the slice: 'overview' (default), "
-                "'anatomy', 'skills', 'capabilities', 'policy', 'sandbox', 'model', 'lineage', "
+                "model/provider backend, your tunable runtime parameters, or your evolution "
+                "lineage (promotions/rollbacks from the release ledger). `topic` selects the "
+                "slice: 'overview' (default), 'anatomy', 'skills', 'capabilities', 'policy', "
+                "'sandbox', 'model', 'parameters', 'lineage', "
                 "or the name of a file/capability/skill for detail (a filename also returns "
                 "that module's docstring). Use it before editing yourself so you target the "
                 "right file - and check 'lineage' before proposing an evolution, so you do "
@@ -101,14 +103,22 @@ WRITE_FILE_TOOL = Tool(
 
 READ_FILE_TOOL = Tool(
     name="read_file",
-    description="Read a file's full text (your own code under ../runtime/releases/, "
-                "workspace files, or the kernel). Use this to SEE current content "
-                "before editing - never ask the user for file contents.",
+    description="Read a file (your own code under ../runtime/releases/, workspace "
+                "files, or the kernel). Use this to SEE current content before "
+                "editing - never ask the user for file contents. Prefer TARGETED "
+                "reads: pass start_line/num_lines for a specific region (find it "
+                "first with grep -n), and keep the default max_chars - whole-file "
+                "reads of big files flood your context and push out earlier steps. "
+                "Only raise max_chars when you truly need the entire file.",
     input_schema={
         "type": "object",
         "properties": {
             "path": {"type": "string"},
             "max_chars": {"type": "integer"},
+            "start_line": {"type": "integer",
+                           "description": "1-based first line of a range read"},
+            "num_lines": {"type": "integer",
+                          "description": "how many lines to return from start_line"},
         },
         "required": ["path"],
     },
@@ -251,10 +261,29 @@ REQUEST_PROMOTION_TOOL = Tool(
     },
 )
 
+SET_PARAM_TOOL = Tool(
+    name="set_param",
+    description="Adjust one of YOUR OWN tunable runtime parameters (history_budget, "
+                "max_steps, read_file_max_chars, ...) for THIS session - see "
+                "inspect_self('parameters') for the full harness with live values, "
+                "bounds and what each knob does. Use it when a default pinches: e.g. "
+                "raise history_budget for a long refactor or max_steps before a big "
+                "autonomous task. Changes are bounded, human-approved and reset on "
+                "restart (a durable change is a human .env edit). Not in review mode.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "value": {"type": "integer"},
+        },
+        "required": ["name", "value"],
+    },
+)
+
 CANONICAL_TOOLS: list[Tool] = [SHELL_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL,
                               REPLACE_IN_FILE_TOOL, APPLY_PATCH_TOOL, FETCH_URL_TOOL,
                               WEB_SEARCH_TOOL, INSPECT_SELF_TOOL, NOTE_EVOLUTION_NEED_TOOL,
-                              FINISH_TOOL_DEF]
+                              SET_PARAM_TOOL, FINISH_TOOL_DEF]
 # Extra tools available only when the agent may evolve the release: build a candidate,
 # run its tests, and request promotion.
 EVOLUTION_TOOLS: list[Tool] = CANONICAL_TOOLS + [MAKE_CANDIDATE_TOOL, RUN_TESTS_TOOL,
@@ -479,14 +508,16 @@ class ShellToolRuntime:
 
     def __init__(self, *, workspace: pathlib.Path, approval: ApprovalPolicy,
                  human: HumanInterface, releases: "pathlib.Path | None" = None,
-                 state: "pathlib.Path | None" = None, max_output: int = 6000,
+                 state: "pathlib.Path | None" = None, max_output: "int | None" = None,
                  progress=None):
         self.workspace = pathlib.Path(workspace)
         self.approval = approval
         self.human = human
         self.releases = pathlib.Path(releases) if releases else None
         self.state = pathlib.Path(state) if state else None
-        self.max_output = max_output
+        # None = read the LIVE params value per call (so set_param acts instantly);
+        # an explicit int (tests) stays fixed.
+        self._max_output = max_output
         # Optional presentation hook: called (with the tool name) right before a slow op
         # runs (AFTER approval), so the TUI can show a live elapsed timer. Never affects
         # behaviour and is only wired by the CLI.
@@ -494,6 +525,10 @@ class ShellToolRuntime:
 
     def set_progress(self, callback) -> None:
         self._progress = callback
+
+    @property
+    def max_output(self) -> int:
+        return self._max_output if self._max_output is not None else params.get("shell_max_output")
 
     def _running(self, name: str) -> None:
         if self._progress:
@@ -606,16 +641,45 @@ class ShellToolRuntime:
                                    "Denied: path is outside the project.")
         if not target.is_file():
             return ToolObservation(call.id, call.name, f"Not a file: {target}")
+        # Default kept deliberately SMALL relative to the history budget: one huge
+        # read must not evict the rest of the working context (that caused re-read
+        # loops). Range reads (start_line/num_lines) are the intended way to see a
+        # specific region of a big file. Read LIVE from the params harness so a
+        # set_param takes effect immediately.
+        default_chars = params.get("read_file_max_chars")
         try:
-            max_chars = int(call.arguments.get("max_chars", 20000))
+            max_chars = int(call.arguments.get("max_chars", default_chars))
         except (TypeError, ValueError):
-            max_chars = 20000
+            max_chars = default_chars
         text = target.read_text(encoding="utf-8", errors="replace")
+        try:
+            start_line = int(call.arguments.get("start_line", 0) or 0)
+        except (TypeError, ValueError):
+            start_line = 0
+        try:
+            num_lines = int(call.arguments.get("num_lines", 0) or 0)
+        except (TypeError, ValueError):
+            num_lines = 0
+        if start_line > 0 or num_lines > 0:
+            lines = text.splitlines(keepends=True)
+            total = len(lines)
+            first = max(1, start_line or 1)
+            last = min(total, first + num_lines - 1) if num_lines > 0 else total
+            text = "".join(lines[first - 1:last])
+            header = f"[lines {first}-{last} of {total}]\n"
+            if len(text) <= max_chars:
+                return ToolObservation(call.id, call.name, header + text)
+            return ToolObservation(call.id, call.name,
+                                   header + text[:max_chars] +
+                                   f"\n...[truncated {len(text) - max_chars} chars; "
+                                   "narrow the range or raise max_chars]")
         if len(text) <= max_chars:
             return ToolObservation(call.id, call.name, text)
         return ToolObservation(call.id, call.name,
                                text[:max_chars] +
-                               f"\n...[truncated {len(text) - max_chars} chars; raise max_chars]")
+                               f"\n...[truncated {len(text) - max_chars} chars; use "
+                               "start_line/num_lines for a targeted range (grep -n "
+                               "finds it) or raise max_chars]")
 
     def _replace_in_file(self, call: ToolCall, mode: str) -> ToolObservation:
         target, err = self._resolve_write_target(call.arguments.get("path", ""), mode)
@@ -718,10 +782,11 @@ class ShellToolRuntime:
         if not (url.startswith("http://") or url.startswith("https://")):
             return ToolObservation(call.id, call.name,
                                    "Denied: url must start with http:// or https://")
+        default_chars = params.get("fetch_url_max_chars")
         try:
-            max_chars = int(call.arguments.get("max_chars", 6000))
+            max_chars = int(call.arguments.get("max_chars", default_chars))
         except (TypeError, ValueError):
-            max_chars = 6000
+            max_chars = default_chars
         self._running("fetch_url")
         try:
             req = urllib.request.Request(url, headers={"User-Agent": _HTTP_UA})
@@ -859,6 +924,29 @@ class ShellToolRuntime:
             text = f"inspect_self failed: {type(exc).__name__}: {exc}"
         return ToolObservation(call.id, call.name, text)
 
+    def _set_param(self, call: ToolCall, mode: str) -> ToolObservation:
+        # Tuning a runtime knob CHANGES behaviour, so it follows the write policy:
+        # read-only review may not tune; work/improve/evolve may, with approval.
+        if not policy_for(mode).write_workspace:
+            return ToolObservation(call.id, call.name,
+                                   f"Denied: {mode} mode is read-only and may not "
+                                   "tune runtime parameters.")
+        name = str(call.arguments.get("name", "") or "").strip()
+        value = call.arguments.get("value")
+        p = params.REGISTRY.get(name)
+        detail = (f"set_param {name} = {value}"
+                  + (f"  (now {params.get(name)}, bounds [{p.lo}, {p.hi}]; {p.desc})"
+                     if p else ""))
+        decision = self.approval.approve(RISK_WRITE, "Approve parameter change?",
+                                         detail=detail)
+        if not decision:
+            return _declined(call, "parameter change", decision.feedback)
+        try:
+            msg = params.set_value(name, value)
+        except ValueError as e:
+            return ToolObservation(call.id, call.name, f"Denied: {e}")
+        return ToolObservation(call.id, call.name, msg)
+
     def _request_promotion(self, call: ToolCall, mode: str) -> ToolObservation:
         if not policy_for(mode).request_promotion:
             return ToolObservation(call.id, call.name,
@@ -910,5 +998,6 @@ class ShellToolRuntime:
         "run_tests": _run_tests,
         "note_evolution_need": _note_evolution_need,
         "inspect_self": _inspect_self,
+        "set_param": _set_param,
         "request_promotion": _request_promotion,
     }

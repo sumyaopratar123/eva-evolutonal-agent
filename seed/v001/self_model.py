@@ -179,7 +179,7 @@ def brief(release: pathlib.Path | None = None) -> str:
         f"docs: read your own anatomy, {len(skills(release))} skills and "
         f"{len(capabilities(release))} ratchet-pinned capabilities ON DEMAND via the "
         f"inspect_self tool (topics: overview | anatomy | skills | capabilities | "
-        f"policy | sandbox | model | lineage | a filename | a capability name)."
+        f"policy | sandbox | model | parameters | lineage | a filename | a capability name)."
     )
 
 
@@ -321,6 +321,12 @@ def lookup(topic: str | None = None, release: pathlib.Path | None = None) -> str
         lines.append("")
         lines.append(sandbox(release))
         return "\n".join(lines)
+    if t in ("parameters", "params", "knobs", "tuning", "harness"):
+        try:
+            import params as p
+            return p.render()
+        except Exception as exc:
+            return f"parameter harness unavailable: {type(exc).__name__}: {exc}"
     if t in ("sandbox", "containment", "free", "safe", "free mode", "safe mode"):
         return sandbox(release)
     if t in ("model", "provider", "backend", "llm", "adapter"):

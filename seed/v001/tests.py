@@ -886,7 +886,7 @@ def check_context_summary_includes_tool_outcome():
     ]
     summary = context_mod.summarize_dropped(dropped)
     assert summary is not None
-    assert "shell: exit=0" in summary, summary
+    assert "shell(cmd=cat m): exit=0" in summary, summary
     assert "Error: old text not found" in summary, summary
 
 
@@ -1460,10 +1460,11 @@ def check_evolution_need_from_user_need_is_recurrence_gated():
             sig = agent.record_capability_gap("extract text from PDFs", "pdf-text", "", "work")
             assert sig == "gap:pdf-text", sig
             assert agent.backlog_count(sig) == 1                     # a one-off
-            assert agent.backlog_count(sig) < agent.PIVOT_THRESHOLD  # not yet a proposal
-            for _ in range(agent.PIVOT_THRESHOLD):
+            threshold = agent.params.get("pivot_threshold")
+            assert agent.backlog_count(sig) < threshold  # not yet a proposal
+            for _ in range(threshold):
                 agent.record_capability_gap("read the PDF the user sent", "pdf-text", "", "work")
-            assert agent.backlog_count(sig) >= agent.PIVOT_THRESHOLD  # recurring -> proposable
+            assert agent.backlog_count(sig) >= threshold  # recurring -> proposable
         finally:
             (agent.BACKLOG, agent.STATE, agent.WORKSPACE, agent.RELEASES) = saved
 
@@ -2260,7 +2261,7 @@ def check_turn_summary_and_visible_friction():
     src = inspect.getsource(agent.run_mode)
     assert src.count("_show_friction(sig)") >= 2
     assert "backlog_count" in inspect.getsource(agent.run_mode)
-    assert "PIVOT_THRESHOLD" in src
+    assert "pivot_threshold" in src
 
 
 def check_self_model_lineage_reads_release_ledger():
@@ -2309,11 +2310,12 @@ def check_pivot_request_hands_over_concrete_evidence():
 
     with tempfile.TemporaryDirectory() as td:
         td = pathlib.Path(td)
-        orig = (agent.BACKLOG, agent.PIVOT_REQUEST, agent.PIVOT_THRESHOLD, agent.ensure_dirs)
+        orig = (agent.BACKLOG, agent.PIVOT_REQUEST, agent.ensure_dirs)
+        prev_thresh = os.environ.get("ORGANISM_PIVOT_THRESHOLD")
         try:
             agent.BACKLOG = td / "backlog.jsonl"
             agent.PIVOT_REQUEST = td / "pivot_request.json"
-            agent.PIVOT_THRESHOLD = 2
+            os.environ["ORGANISM_PIVOT_THRESHOLD"] = "2"  # live via the params harness
             agent.ensure_dirs = lambda: None
             rows = [
                 {"kind": "execution_error", "signature": "shell:exit=127:pdftotext",
@@ -2329,7 +2331,11 @@ def check_pivot_request_hands_over_concrete_evidence():
             # the LATEST evidence wins, and it is the raw observed failure
             assert "still not found" in req["context"]
         finally:
-            agent.BACKLOG, agent.PIVOT_REQUEST, agent.PIVOT_THRESHOLD, agent.ensure_dirs = orig
+            agent.BACKLOG, agent.PIVOT_REQUEST, agent.ensure_dirs = orig
+            if prev_thresh is None:
+                os.environ.pop("ORGANISM_PIVOT_THRESHOLD", None)
+            else:
+                os.environ["ORGANISM_PIVOT_THRESHOLD"] = prev_thresh
 
 
 def check_pivot_task_carries_evidence_into_improve_cycle():
@@ -2345,6 +2351,267 @@ def check_pivot_task_carries_evidence_into_improve_cycle():
     assert "Observed failure" in task
     bare = supervisor.pivot_task("sig", "reason")
     assert "Observed failure" not in bare and "sig" in bare
+
+
+def check_read_file_supports_range_reads():
+    """read_file takes start_line/num_lines for targeted range reads, so the model can read a specific region of a big file instead of re-reading it whole from the top."""
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td) / "ws"
+        ws.mkdir()
+        (ws / "big.txt").write_text(
+            "".join(f"line {i}\n" for i in range(1, 201)), encoding="utf-8")
+        runtime = tools_mod.ShellToolRuntime(
+            workspace=ws,
+            approval=human_mod.ApprovalPolicy(human_mod.AutoHumanInterface(), mode="never"),
+            human=human_mod.AutoHumanInterface())
+        out = runtime.execute(core.ToolCall("r1", "read_file", {
+            "path": "big.txt", "start_line": 50, "num_lines": 3}), "work").output
+        assert "[lines 50-52 of 200]" in out, out
+        assert "line 50" in out and "line 52" in out and "line 53" not in out, out
+        # open-ended range: from start_line to EOF
+        out2 = runtime.execute(core.ToolCall("r2", "read_file", {
+            "path": "big.txt", "start_line": 199}), "work").output
+        assert "line 199" in out2 and "line 200" in out2, out2
+
+
+def check_read_file_default_read_is_context_frugal():
+    """read_file's DEFAULT max_chars stays well below the history budget, so one whole-file read can no longer evict most of the visible context (the root cause of compaction re-read loops); explicit max_chars still allows big reads."""
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td) / "ws"
+        ws.mkdir()
+        (ws / "huge.txt").write_text("x" * 15000, encoding="utf-8")
+        runtime = tools_mod.ShellToolRuntime(
+            workspace=ws,
+            approval=human_mod.ApprovalPolicy(human_mod.AutoHumanInterface(), mode="never"),
+            human=human_mod.AutoHumanInterface())
+        out = runtime.execute(
+            core.ToolCall("f1", "read_file", {"path": "huge.txt"}), "work").output
+        assert "[truncated" in out, "default read must truncate a 15k file"
+        assert len(out) <= 8500, f"default read too large: {len(out)} chars"
+        full = runtime.execute(core.ToolCall("f2", "read_file", {
+            "path": "huge.txt", "max_chars": 20000}), "work").output
+        assert "[truncated" not in full and len(full) == 15000
+
+
+def check_context_summary_includes_tool_args():
+    """The condensed summary of dropped steps preserves each tool call's identifying arguments (path/cmd/query) and flags truncated outputs - so after compaction the model KNOWS what it already read and doesn't re-read it in a loop."""
+    import context as context_mod
+
+    dropped = [
+        core.Event(role="assistant", content="reading my core",
+                   tool_calls=[core.ToolCall("a1", "read_file",
+                                             {"path": "../runtime/releases/v003/core.py",
+                                              "start_line": 10, "num_lines": 5})]),
+        core.Event(role="tool",
+                   content="[lines 10-14 of 400]\ncode\n...[truncated 900 chars; x]",
+                   name="read_file", tool_call_id="a1"),
+        core.Event(role="assistant", content="probing",
+                   tool_calls=[core.ToolCall("a2", "shell", {"cmd": "grep -n foo core.py"})]),
+        core.Event(role="tool", content="exit=0\n12:foo", name="shell", tool_call_id="a2"),
+    ]
+    summary = context_mod.summarize_dropped(dropped)
+    assert summary is not None
+    assert "path=../runtime/releases/v003/core.py" in summary, summary
+    assert "start_line=10" in summary, summary
+    assert "(truncated)" in summary, summary
+    assert "cmd=grep -n foo core.py" in summary, summary
+
+
+def check_compact_tail_preserves_turn_boundary():
+    """compact()'s verbatim tail starts at an assistant step, never with orphaned tool results - extending backwards over tool events so an assistant->tool pair is never split (which would lose the call/result pairing and upset strict provider APIs)."""
+    import context as context_mod
+
+    evs = [core.Event(role="system", content="s"),
+           core.Event(role="user", content="task " + "x" * 400)]
+    for i in range(10):
+        evs.append(core.Event(role="assistant", content=f"step {i} " + "y" * 200,
+                              tool_calls=[core.ToolCall(f"c{i}a", "shell", {}),
+                                          core.ToolCall(f"c{i}b", "shell", {})]))
+        evs.append(core.Event(role="tool", content="r" * 200, name="shell",
+                              tool_call_id=f"c{i}a"))
+        evs.append(core.Event(role="tool", content="r" * 200, name="shell",
+                              tool_call_id=f"c{i}b"))
+    # keep=4 would naively cut between an assistant step and its two tool results
+    view = context_mod.compact(evs, budget=1500, keep=4)
+    tail_start = next(i for i, e in enumerate(view)
+                      if e.role in ("assistant", "tool") and i > 1)
+    assert view[tail_start].role == "assistant", \
+        f"tail must start at an assistant step, got {view[tail_start].role}"
+    # every tool event in the view has its calling assistant step present before it
+    ids_seen = set()
+    for e in view:
+        if e.role == "assistant" and e.tool_calls:
+            ids_seen.update(tc.id for tc in e.tool_calls)
+        if e.role == "tool" and e.tool_call_id:
+            assert e.tool_call_id in ids_seen, "orphaned tool result in compact view"
+
+
+def check_core_blocks_repeated_identical_calls():
+    """run_agent_loop breaks context loops: the same tool call (name + arguments) returning the SAME output is executed at most twice per turn-loop; further repeats get a guidance observation instead of burning steps on information the model already has."""
+    from session import SessionStore
+
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td)
+        (ws / "a.txt").write_text("stable content", encoding="utf-8")
+        runtime = tools_mod.ShellToolRuntime(
+            workspace=ws,
+            approval=human_mod.ApprovalPolicy(human_mod.AutoHumanInterface(), mode="never"),
+            human=human_mod.AutoHumanInterface())
+        store = SessionStore(ws / "s.jsonl")
+        store.seed([core.Event(role="system", content="s"),
+                    core.Event(role="user", content="go")], "work")
+
+        def same_read(turn):
+            return core.ModelResult(say="", tool_calls=[
+                core.ToolCall(id="x", name="read_file", arguments={"path": "a.txt"})])
+
+        core.run_agent_loop(adapter=adapters.FakeAdapter(same_read), runtime=runtime,
+                            session=store, tools=tools_mod.CANONICAL_TOOLS,
+                            system="s", mode="work", max_steps=5)
+        outs = [e.content for e in store.events() if e.role == "tool"]
+        assert outs[0] == "stable content" and outs[1] == "stable content", outs[:2]
+        assert any("Repeated identical call blocked" in (o or "") for o in outs[2:]), \
+            "third identical call must be answered with the loop-breaker warning"
+
+
+def check_maxsteps_requests_continuation_in_every_attended_mode():
+    """Hitting the step limit never silently aborts an attended run: EVERY mode with a human present (evolve included) asks 'Keep working on this task?', and autonomous (--yes) runs auto-continue a bounded number of batches before stopping."""
+    import inspect
+    import agent
+
+    src = inspect.getsource(agent.run_mode)
+    assert "attended = not AUTO_YES" in src, "run_mode must know whether a human is present"
+    # the continuation prompt is gated on attended (all modes), NOT on interactive
+    seg = src.split('outcome == "maxsteps"', 1)[1]
+    seg = seg.split("if not interactive:", 1)[0]
+    assert "if attended:" in seg and "Keep working on this task?" in seg, seg
+    assert "max_auto_continues" in seg, "autonomous runs must auto-continue (bounded)"
+    assert agent.params.get("max_auto_continues") >= 1
+
+
+def check_improve_and_review_prompts_are_dialogic():
+    """improve and review are CONVERSATIONS like work, not batch jobs: their system prompts carry the shared dialogue contract (answer digressions in plain replies, treat declined approvals as feedback, ask instead of chaining approvals)."""
+    import agent
+
+    assert "Dialogue, not batch mode" in agent.DIALOG
+    assert "DECLINED" in agent.DIALOG and "ASK in a plain reply" in agent.DIALOG
+    for mode in ("work", "improve", "review"):
+        assert agent.DIALOG in agent.SYSTEMS[mode], f"{mode} prompt must include DIALOG"
+    assert "CONVERSATION" in agent.IMPROVE_SYSTEM
+    assert "CONVERSATION" in agent.REVIEW_SYSTEM
+
+
+def check_prompts_request_visible_reasoning():
+    """Every mode's system prompt instructs EVA to start tool-calling messages with one short visible reasoning line, so its thinking shows up live in the TUI instead of silent tool volleys."""
+    import agent
+
+    assert "Think out loud" in agent.THINK_ALOUD
+    for mode in ("work", "improve", "review", "evolve"):
+        assert agent.THINK_ALOUD in agent.SYSTEMS[mode], \
+            f"{mode} prompt must request visible reasoning"
+
+
+def check_tui_milestone_banner():
+    """StatusView.milestone renders a framed MILESTONE banner (label + detail), used to make evolution lifecycle moments (candidate created / tests pass / promotion requested) unmissable in the TUI."""
+    import io
+    import tui
+
+    buf = io.StringIO()
+    v = tui.StatusView(mode="evolve", stream=buf, color=False)
+    v.milestone("tests PASS", "tests PASS (exit=0)")
+    out = buf.getvalue()
+    assert "MILESTONE: tests PASS" in out, out
+    assert "tests PASS (exit=0)" in out, out
+    assert "\u250c" in out and "\u2514" in out, "banner must be framed"
+
+
+def check_param_harness_is_live_bounded_and_inspectable():
+    """The parameter harness declares EVA's tunable numbers ONCE (env var, default, hard bounds, purpose): get() reads LIVE values so a change acts immediately, set_value enforces the bounds and stays session-scoped (env only), and inspect_self('parameters') renders the whole harness."""
+    import params as params_mod
+    import self_model as sm
+
+    # every knob the code relies on is declared
+    for name in ("history_budget", "history_keep", "max_steps", "max_auto_continues",
+                 "pivot_threshold", "read_file_max_chars", "fetch_url_max_chars",
+                 "shell_max_output", "llm_timeout"):
+        assert name in params_mod.REGISTRY, f"missing param: {name}"
+
+    p = params_mod.REGISTRY["max_steps"]
+    prev = os.environ.get(p.env)
+    try:
+        os.environ.pop(p.env, None)
+        assert params_mod.get("max_steps") == p.default
+        # LIVE: an env change is visible on the next get(), no re-import needed
+        os.environ[p.env] = str(p.default + 5)
+        assert params_mod.get("max_steps") == p.default + 5
+        # set_value validates bounds and writes ONLY the process env (session-scoped)
+        msg = params_mod.set_value("max_steps", p.lo)
+        assert os.environ[p.env] == str(p.lo) and str(p.lo) in msg
+        for bad in (p.lo - 1, p.hi + 1, "nope"):
+            try:
+                params_mod.set_value("max_steps", bad)
+                assert False, f"set_value must reject {bad!r}"
+            except ValueError:
+                pass
+        try:
+            params_mod.set_value("no_such_param", 1)
+            assert False, "unknown names must be rejected"
+        except ValueError as e:
+            assert "max_steps" in str(e)  # the error lists the known knobs
+        # garbage in the env degrades to the default instead of crashing
+        os.environ[p.env] = "garbage"
+        assert params_mod.get("max_steps") == p.default
+    finally:
+        if prev is None:
+            os.environ.pop(p.env, None)
+        else:
+            os.environ[p.env] = prev
+
+    # EVA can SEE its own knobs (values + bounds + purpose) via the self-model
+    text = sm.lookup("parameters")
+    assert "history_budget" in text and "max_steps" in text and "bounds" in text
+
+
+def check_set_param_tool_is_gated_and_bounded():
+    """set_param is a canonical tool that tunes a runtime knob session-scoped: read-only review is denied, other modes need human approval, out-of-bounds values are refused, and an approved change is applied to the live environment."""
+    canon = {t.name for t in tools_mod.CANONICAL_TOOLS}
+    assert "set_param" in canon
+    import params as params_mod
+
+    p = params_mod.REGISTRY["read_file_max_chars"]
+    prev = os.environ.get(p.env)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            ws = pathlib.Path(d)
+            h = human_mod.AutoHumanInterface()
+            rt = tools_mod.ShellToolRuntime(
+                workspace=ws, human=h,
+                approval=human_mod.ApprovalPolicy(h, mode="never"))
+            # review is read-only: tuning behaviour is denied there
+            obs = rt.execute(core.ToolCall("1", "set_param",
+                                           {"name": "read_file_max_chars", "value": 9000}),
+                             "review")
+            assert "denied" in obs.output.lower(), obs.output
+            # work: approved (auto) -> applied, session-scoped via the env
+            obs = rt.execute(core.ToolCall("2", "set_param",
+                                           {"name": "read_file_max_chars", "value": 9000}),
+                             "work")
+            assert "9000" in obs.output and os.environ.get(p.env) == "9000", obs.output
+            assert params_mod.get("read_file_max_chars") == 9000
+            # bounds are enforced (the registry's hi/lo are hard limits)
+            obs = rt.execute(core.ToolCall("3", "set_param",
+                                           {"name": "read_file_max_chars",
+                                            "value": p.hi + 1}), "work")
+            assert "denied" in obs.output.lower() and "bounds" in obs.output, obs.output
+            # unknown knobs are refused with the list of known ones
+            obs = rt.execute(core.ToolCall("4", "set_param",
+                                           {"name": "nonsense", "value": 1}), "work")
+            assert "denied" in obs.output.lower(), obs.output
+    finally:
+        if prev is None:
+            os.environ.pop(p.env, None)
+        else:
+            os.environ[p.env] = prev
 
 
 def _all_checks():

@@ -751,6 +751,22 @@ class StatusView:
         """A small dim status line for in-chat command feedback (/model, /provider, /resume)."""
         self._w(_paint("  " + msg, "gray", color=self.color))
 
+    def milestone(self, label: str, detail: str = "") -> None:
+        """A framed MILESTONE banner for evolution lifecycle moments (candidate
+        created / tests pass / promotion requested), so self-modification progress
+        is unmissable in the TUI instead of buried in scrolling tool output."""
+        head = f"\u2726 MILESTONE: {label}"
+        body = _clip(detail, 70)
+        width = max(len(head), len(body)) + 4
+        top = "\u250c" + "\u2500" * width + "\u2510"
+        bot = "\u2514" + "\u2500" * width + "\u2518"
+        lines = ["", top, "\u2502  " + head.ljust(width - 2) + "\u2502"]
+        if body:
+            lines.append("\u2502  " + body.ljust(width - 2) + "\u2502")
+        lines.append(bot)
+        for line in lines:
+            self._w(_paint(line, "magenta", "bold", color=self.color))
+
     def status(self, rows) -> None:
         """Render the /status one-glance state (list of (key, value) pairs)."""
         self._w(format_status(rows, color=self.color))

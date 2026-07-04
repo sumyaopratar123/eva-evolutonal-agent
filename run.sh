@@ -17,11 +17,12 @@ if [[ "${1:-}" == "--free" ]]; then
   printf '     Omit --free for the default hardened SAFE sandbox.\n\n' >&2
 fi
 
-# Key-guard (opt-in via EVA_KEYGUARD=1 in .env): layer the sidecar proxy so the
-# API key lives ONLY in the llm-proxy container - EVA's container stays keyless.
-if [ -f .env ] && grep -Eq '^[[:space:]]*EVA_KEYGUARD[[:space:]]*=[[:space:]]*1[[:space:]]*$' .env; then
+# Key-guard (ON by default; opt out with EVA_KEYGUARD=0 in .env): layer the sidecar
+# proxy so the API key lives ONLY in the llm-proxy container - EVA's container stays
+# keyless. Defaulting to the safer wiring matches the project's security posture.
+if ! { [ -f .env ] && grep -Eq '^[[:space:]]*EVA_KEYGUARD[[:space:]]*=[[:space:]]*0[[:space:]]*$' .env; }; then
   COMPOSE_FILES+=(-f docker-compose.keyguard.yml)
-  echo "  (key-guard on: API key stays in the llm-proxy sidecar; EVA's container is keyless)" >&2
+  echo "  (key-guard on: API key stays in the llm-proxy sidecar; EVA's container is keyless. EVA_KEYGUARD=0 disables)" >&2
 fi
 
 # Bare `./run.sh` just starts EVA (work is the default mode), matching run.ps1.
@@ -267,7 +268,7 @@ eva_onboarding() {
       read -r t </dev/tty || t=""
       [[ "$t" =~ ^[0-9]+$ ]] && { set_env_var LLM_TIMEOUT "$t"; did=1; }
       local g cur_g
-      cur_g="off"; [ "$(read_env_val EVA_KEYGUARD)" = "1" ] && cur_g="on"
+      cur_g="on"; [ "$(read_env_val EVA_KEYGUARD)" = "0" ] && cur_g="off"
       printf "Key-guard: keep the API key in a sidecar so EVA's container is keyless? [y/n] (Enter keeps %s) " "$cur_g"
       read -r g </dev/tty || g=""
       case "$g" in

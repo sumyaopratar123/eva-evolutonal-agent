@@ -18,6 +18,8 @@ the rest of EVA evolve without re-binding to a provider.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -153,6 +155,28 @@ class SessionStore(Protocol):
 # Tool names that terminate the loop when successfully executed.
 FINISH_TOOL = "finish"
 
+# Loop breaker: after this many IDENTICAL calls (same tool, same arguments) that
+# produced the SAME output within one turn-loop, further repeats are answered with
+# a warning instead of executed. Repeating a call whose result hasn't changed adds
+# no information - it is the signature of a compaction-induced context loop.
+REPEAT_CALL_LIMIT = 2
+
+_REPEAT_WARNING = (
+    "Repeated identical call blocked: you already ran this exact tool call with the "
+    "same arguments {n} times this turn and got the SAME result each time - it is in "
+    "your recent context and in the condensed progress summary above. Re-running it "
+    "will not produce new information. Use the result you already have to proceed; "
+    "if something is genuinely missing, read a DIFFERENT range/path or ask the user."
+)
+
+
+def _call_key(call: ToolCall) -> str:
+    try:
+        args = json.dumps(call.arguments or {}, sort_keys=True, default=str)
+    except Exception:
+        args = repr(call.arguments)
+    return f"{call.name}:{args}"
+
 
 def run_agent_loop(
     *,
@@ -192,6 +216,8 @@ def run_agent_loop(
         identity = {}
 
     step = 0
+    # (tool name + args) -> (output hash, identical-result count) for the repeat guard.
+    repeat_seen: dict[str, tuple[str, int]] = {}
     for _ in range(max_steps):
         step += 1
         turn = AgentTurn(system=system, events=session.events(), tools=tools, mode=mode)
@@ -219,15 +245,30 @@ def run_agent_loop(
         for call in result.tool_calls:
             if on_tool_call:
                 on_tool_call(call)
-            try:
-                obs = runtime.execute(call, mode)
-            except Exception as exc:
-                if on_error:
-                    on_error("tool", exc)
-                obs = ToolObservation(
-                    call_id=call.id, name=call.name,
-                    output=f"Tool '{call.name}' crashed: {type(exc).__name__}: {exc}",
-                )
+            key = _call_key(call)
+            prev = repeat_seen.get(key)
+            if (call.name != FINISH_TOOL and prev is not None
+                    and prev[1] >= REPEAT_CALL_LIMIT):
+                # Loop breaker: don't execute yet another identical call whose
+                # result has already proven stable - answer with guidance instead.
+                obs = ToolObservation(call_id=call.id, name=call.name,
+                                      output=_REPEAT_WARNING.format(n=prev[1]))
+            else:
+                try:
+                    obs = runtime.execute(call, mode)
+                except Exception as exc:
+                    if on_error:
+                        on_error("tool", exc)
+                    obs = ToolObservation(
+                        call_id=call.id, name=call.name,
+                        output=f"Tool '{call.name}' crashed: {type(exc).__name__}: {exc}",
+                    )
+                digest = hashlib.sha256((obs.output or "").encode(
+                    "utf-8", "replace")).hexdigest()
+                if prev is not None and prev[0] == digest:
+                    repeat_seen[key] = (digest, prev[1] + 1)
+                else:
+                    repeat_seen[key] = (digest, 1)
             tool_meta = {"ts": time.time(), "mode": mode, "step": step,
                          "kind": "tool", "tool": obs.name,
                          "tool_call_id": obs.call_id}

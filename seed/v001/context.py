@@ -22,11 +22,33 @@ def chars(events) -> int:
 
 def _outcome_snippet(result: "str | None") -> str:
     """First meaningful line of a tool result (e.g. 'exit=0' or an error), so the
-    model can still tell success from failure after the step is condensed away."""
+    model can still tell success from failure after the step is condensed away.
+    A truncated tool output is flagged, so the model knows a past read was partial
+    without having to redo it just to check."""
     text = (result or "").strip()
     if not text:
         return ""
-    return text.splitlines()[0].strip()[:60]
+    snip = text.splitlines()[0].strip()[:60]
+    if "[truncated" in text:
+        snip += " (truncated)"
+    return snip
+
+
+# Argument keys worth preserving in the condensed summary, most identifying first.
+# WHAT a call touched (path/cmd/query) is exactly what the model needs to know it
+# already did something - dropping it caused redundant re-reads after compaction.
+_ARG_KEYS = ("path", "cmd", "query", "url", "candidate", "topic", "signature",
+             "start_line", "num_lines")
+
+
+def _args_snippet(arguments) -> str:
+    """Compact `key=value` view of a tool call's identifying arguments."""
+    args = arguments or {}
+    parts = []
+    for key in _ARG_KEYS:
+        if key in args and args[key] not in (None, ""):
+            parts.append(f"{key}={str(args[key])[:50]}")
+    return ", ".join(parts)
 
 
 def summarize_dropped(dropped) -> "str | None":
@@ -47,8 +69,10 @@ def summarize_dropped(dropped) -> "str | None":
             if ev.tool_calls:
                 calls = []
                 for tc in ev.tool_calls:
+                    args = _args_snippet(tc.arguments)
+                    label = f"{tc.name}({args})" if args else tc.name
                     snip = _outcome_snippet(results.get(tc.id))
-                    calls.append(f"{tc.name}: {snip}" if snip else tc.name)
+                    calls.append(f"{label}: {snip}" if snip else label)
                 tool = "; ".join(calls)
             else:
                 tool = "-"
@@ -68,8 +92,14 @@ def compact(events, budget: int, keep: int) -> "list[Event]":
     system = evs[0]
     first = evs[1]
     first_trimmed = Event(role=first.role, content=(first.content or "")[:800])
-    tail = evs[-keep:]
-    dropped = evs[2:-keep]
+    # Cut at a TURN boundary: extend the tail backwards over leading tool events so
+    # it starts at the assistant step that made those calls. A tail that opens with
+    # orphaned tool results loses the pairing (and confuses strict provider APIs).
+    cut = len(evs) - keep
+    while cut > 2 and evs[cut].role == "tool":
+        cut -= 1
+    tail = evs[cut:]
+    dropped = evs[2:cut]
 
     view = [system, first_trimmed]
     summary = summarize_dropped(dropped)
