@@ -1077,9 +1077,16 @@ def check_note_lesson_journal_survives_sessions():
             summary = agent.lessons_summary()
             assert summary.count("apt is unavailable") == 1, summary   # deduped
             assert "[user-preference] user prefers German replies" in summary
+            # RE-AFFIRMING an old lesson bumps it to the FRONT of the newest window,
+            # so a still-true insight is never evicted just because it was learned early.
             for _ in range(20):
                 agent.record_lesson(f"filler {_}", "self", "work")
-            assert len(agent.lessons_summary(limit=10).splitlines()) == 10  # bounded
+            assert "apt is unavailable" not in agent.lessons_summary(limit=10)  # aged out
+            agent.record_lesson("apt is unavailable in the safe sandbox", "environment", "work")
+            bumped = agent.lessons_summary(limit=10)
+            assert "apt is unavailable" in bumped, bumped   # re-affirmation revives it
+            assert bumped.count("apt is unavailable") == 1, bumped   # still deduped
+            assert len(bumped.splitlines()) == 10  # bounded
         finally:
             (agent.LESSONS, agent.STATE, agent.WORKSPACE, agent.RELEASES) = saved
 

@@ -582,11 +582,14 @@ def record_lesson(lesson: str, category: str, mode: str) -> None:
 
 def lessons_summary(limit: int = 10) -> str:
     """The most recent durable lessons, newest last, deduped - EVA's experience
-    carried across sessions. Injected into the initial context of every mode."""
+    carried across sessions. Injected into the initial context of every mode.
+
+    Dedup keeps each lesson's MOST RECENT occurrence: re-affirming an old lesson
+    bumps it back to the front of the surfaced window (recency of last mention),
+    instead of being pinned to - and evicted at - its first-ever position."""
     if not LESSONS.exists():
         return "(none yet)"
-    rows: list[str] = []
-    seen: set[str] = set()
+    ordered: dict[str, str] = {}
     try:
         for line in LESSONS.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
@@ -597,13 +600,16 @@ def lessons_summary(limit: int = 10) -> str:
             except Exception:
                 continue
             text = str(rec.get("lesson") or "").strip()
-            if not text or text.lower() in seen:
+            if not text:
                 continue
-            seen.add(text.lower())
             cat = str(rec.get("category") or "").strip()
-            rows.append(f"- [{cat}] {text[:200]}" if cat else f"- {text[:200]}")
+            formatted = f"- [{cat}] {text[:200]}" if cat else f"- {text[:200]}"
+            key = text.lower()
+            ordered.pop(key, None)   # re-affirmation moves the lesson to the end
+            ordered[key] = formatted
     except Exception:
         return "(none yet)"
+    rows = list(ordered.values())
     return "\n".join(rows[-limit:]) or "(none yet)"
 
 
