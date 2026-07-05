@@ -91,8 +91,9 @@ services:
       EVA_GATE_VERBOSE: "${EVA_GATE_VERBOSE:-}"
       # Prompt spotlighting (opt-in, default off): frame tool/web/file output as untrusted data.
       EVA_PROMPT_SPOTLIGHT: "${EVA_PROMPT_SPOTLIGHT:-}"
-      # Prompt admission audit on promotion (opt-in, default off): screen candidate prompt-surface
-      # changes. =1 deterministic; =llm (or EVA_PROMPT_AUDIT_LLM=1) adds the nonce-guarded LLM judge.
+      # Prompt admission audit on promotion (deterministic layers ON by default; =0 disables):
+      # screens candidate prompt-surface changes. =llm (or EVA_PROMPT_AUDIT_LLM=1) adds the
+      # nonce-guarded LLM judge.
       EVA_PROMPT_AUDIT: "${EVA_PROMPT_AUDIT:-}"
       EVA_PROMPT_AUDIT_LLM: "${EVA_PROMPT_AUDIT_LLM:-}"
       # Sandbox mode (safe | free). Safe = this hardened container (default). The free

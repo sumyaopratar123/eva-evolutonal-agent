@@ -2383,7 +2383,7 @@ def check_prompt_spotlight_is_opt_in_and_frames_untrusted_output():
 
 
 def check_prompt_audit_screens_candidate_prompt_surface():
-    """The opt-in prompt admission audit deterministically diffs the prompt surface, blocks malicious prompt changes, passes benign ones, and its optional LLM judge is nonce-guarded + fail-closed."""
+    """The prompt admission audit (deterministic layers ON by default, EVA_PROMPT_AUDIT=0 disables) diffs the prompt surface, blocks malicious prompt changes, passes benign ones, and its optional LLM judge is nonce-guarded + fail-closed."""
     import tempfile
     import pathlib
     import prompt_audit
@@ -2395,6 +2395,15 @@ def check_prompt_audit_screens_candidate_prompt_surface():
     _saved_env = {k: os.environ.pop(k, None)
                   for k in ("EVA_PROMPT_AUDIT_LLM", "EVA_PROMPT_AUDIT")}
     try:
+        # the deterministic layers are free -> ON by default; only an explicit
+        # 0/false/no/off disables, and the LLM judge stays opt-in
+        assert prompt_audit.enabled(), "prompt audit must be ON by default"
+        assert not prompt_audit.llm_enabled(), "LLM judge must stay opt-in"
+        os.environ["EVA_PROMPT_AUDIT"] = "0"
+        assert not prompt_audit.enabled(), "EVA_PROMPT_AUDIT=0 must disable the audit"
+        os.environ["EVA_PROMPT_AUDIT"] = "llm"
+        assert prompt_audit.enabled() and prompt_audit.llm_enabled()
+        os.environ.pop("EVA_PROMPT_AUDIT", None)
         with tempfile.TemporaryDirectory() as d:
             base = pathlib.Path(d) / "base"
             cand = pathlib.Path(d) / "cand"

@@ -45,7 +45,8 @@ you'd call "the agent" — loop, tools, adapters, memory, self-model, TUI — is
   agent's reach. It seeds the genome, runs the final gate, keeps the release ledger.
 - **Gated evolution** — EVA never edits the running code. It builds a *candidate copy*,
   which must survive the full gate stack (tests, ratchet, smoke, dry-runs, kernel
-  constitution, prompt-surface audit) before it is promoted. Fail → discarded.
+  constitution, prompt-surface audit — deterministic layers on by default, an optional
+  nonce-guarded LLM judge via `EVA_PROMPT_AUDIT=llm`) before it is promoted. Fail → discarded.
 - **The ratchet** — a candidate may never *execute* fewer checks than the live release.
   Capabilities can only grow; guardrails can't silently erode.
 - **Generated self-knowledge** — EVA's self-model is derived from the live code on every

@@ -200,11 +200,12 @@ def candidate_gate(candidate_rel, rounds=2):
     if not gates_not_weakened(path):
         return False
 
-    # Opt-in prompt admission audit (EVA_PROMPT_AUDIT, default OFF): a defense-in-depth SENSOR
-    # that screens changes to the PROMPT SURFACE (system prompts, tool descriptions, mode/
-    # self-model text) for gate-weakening / approval-bypass / deception / secret-exfil. It runs
-    # in THIS (trusted, current) release's process against the candidate, can only tighten
-    # (block/warn -> reject), and is fail-closed. Default off -> the gate is unchanged.
+    # Prompt admission audit (deterministic layers ON by default - offline and cheap;
+    # EVA_PROMPT_AUDIT=0 disables, =llm adds the nonce-guarded judge): a defense-in-depth
+    # SENSOR that screens changes to the PROMPT SURFACE (system prompts, tool descriptions,
+    # mode/self-model text) for gate-weakening / approval-bypass / deception / secret-exfil.
+    # It runs in THIS (trusted, current) release's process against the candidate, can only
+    # tighten (block/warn -> reject), and is fail-closed.
     try:
         import prompt_audit
     except Exception:

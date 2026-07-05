@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Prompt admission audit for candidate releases (opt-in, default OFF).
+"""Prompt admission audit for candidate releases (deterministic layers ON by default;
+the LLM judge stays opt-in).
 
 A defense-in-depth SENSOR on the promotion path. The kernel's hash floor, the
 capability floor, the constitutional test-body pins, the ratchet and human review are
@@ -8,8 +9,9 @@ the real anchors; this only screens the one surface they deliberately leave free
 string literals in the prompt-bearing modules, which are meant to evolve and therefore
 cannot be hash-pinned. It can only ever ADD `block`/`warn`; a `pass` grants nothing.
 
-Three layers (enable with EVA_PROMPT_AUDIT=1; add the LLM judge with EVA_PROMPT_AUDIT=llm
-or EVA_PROMPT_AUDIT_LLM=1):
+Three layers (layers 1+2 are deterministic, offline and cheap - they run by DEFAULT;
+disable with EVA_PROMPT_AUDIT=0. The LLM judge is opt-in via EVA_PROMPT_AUDIT=llm or
+EVA_PROMPT_AUDIT_LLM=1):
   1. prompt_surface_diff  - deterministic, ungameable, offline: the strings ADDED/CHANGED
      in the candidate's prompt surface vs the active baseline release.
   2. static_findings      - deterministic regex block/warn rules over those strings.
@@ -40,8 +42,10 @@ _MIN_LEN = 24  # audit substantial strings (prompts/descriptions); ignore tiny l
 
 
 def enabled() -> bool:
-    """True if the prompt audit runs at all (EVA_PROMPT_AUDIT in 1/true/yes/on/llm)."""
-    return (os.environ.get("EVA_PROMPT_AUDIT", "") or "").strip().lower() in ("1", "true", "yes", "on", "llm")
+    """True if the prompt audit runs at all. The deterministic layers are free (offline,
+    no LLM call), so the audit is ON by default; only an explicit EVA_PROMPT_AUDIT in
+    0/false/no/off disables it."""
+    return (os.environ.get("EVA_PROMPT_AUDIT", "") or "").strip().lower() not in ("0", "false", "no", "off")
 
 
 def llm_enabled() -> bool:
