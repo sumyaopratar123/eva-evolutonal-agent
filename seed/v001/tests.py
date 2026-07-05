@@ -1699,6 +1699,9 @@ def check_evolve_prompt_warns_of_constitutional_checks():
         prompt = agent.system_for(mode).lower()
         assert "constitutional" in prompt, mode
         assert "kernel" in prompt and "weaken" in prompt, mode
+        # the kernel's substance floor is prompt-visible too, so EVA learns the rule
+        # BEFORE a gate rejection instead of from it
+        assert "substance" in prompt and "hollow" in prompt, mode
 
 
 def check_identity_ethos_opens_every_mode_prompt():
@@ -1718,6 +1721,9 @@ def check_identity_ethos_opens_every_mode_prompt():
         assert "evidence" in low, mode
         assert "inspect_self" in s, mode                  # on-demand depth in all modes
         assert "care about" in low, mode                  # ethos, not just mechanics
+        assert "why you exist" in low, mode               # purpose, not just features
+        assert "compound" in low, mode                    # abilities accumulate across generations
+        assert "architect" in low, mode                   # architectural self-awareness, not just patching
 
 
 def check_apply_patch_tool():
@@ -2913,6 +2919,9 @@ def check_improve_and_review_prompts_are_dialogic():
 
     assert "Dialogue, not batch mode" in agent.DIALOG
     assert "DECLINED" in agent.DIALOG and "ASK in a plain reply" in agent.DIALOG
+    # resumed sessions hand control BACK to the human: EVA must ask, not self-finish
+    resumed_rule = " ".join(agent.DIALOG.split())
+    assert "RESUMED" in agent.DIALOG and "never declare the session over" in resumed_rule
     for mode in ("work", "improve", "review"):
         assert agent.DIALOG in agent.SYSTEMS[mode], f"{mode} prompt must include DIALOG"
     assert "CONVERSATION" in agent.IMPROVE_SYSTEM
