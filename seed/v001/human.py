@@ -152,7 +152,13 @@ def extract_image_attachments(text, base_dir="."):
             latest = grab_clipboard_image(base_dir)
         if latest is None:
             latest = latest_staged_image(base_dir)
-        text = re.sub(r"(?<!\S)/paste(?!\S)", (latest.name if latest else ""), text)
+        # No image found -> substitute a VISIBLE note, never an empty string: an
+        # empty user message would become an empty text block that Anthropic
+        # rejects (HTTP 400) and, once in the session log, poisons every retry.
+        replacement = (latest.name if latest else
+                       "(/paste: no screenshot found - the clipboard had no image "
+                       "and nothing was staged; tell the user how to provide one)")
+        text = re.sub(r"(?<!\S)/paste(?!\S)", replacement, text)
 
     def _md(match):
         img = _token_to_image(match.group(1), base_dir)

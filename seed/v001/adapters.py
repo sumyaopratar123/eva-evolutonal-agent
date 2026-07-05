@@ -529,15 +529,17 @@ class AnthropicAdapter:
         return {"type": "image", "source": {"type": "url", "url": url}}
 
     def _user_blocks(self, ev) -> list[dict]:
+        # Anthropic rejects empty text blocks (HTTP 400) - and an empty block in
+        # the session history poisons EVERY later request. Never emit one.
         blocks: list[dict] = []
-        if ev.content:
+        if ev.content and str(ev.content).strip():
             blocks.append(self._text_block(ev.content))
         for img in (ev.images or []):
             if isinstance(img, dict) and img.get("url"):
                 b = self._image_block(img)
                 if b:
                     blocks.append(b)
-        return blocks or [self._text_block("")]
+        return blocks or [self._text_block("(empty message)")]
 
     @staticmethod
     def _thinking_blocks(ev) -> list[dict]:
@@ -577,14 +579,15 @@ class AnthropicAdapter:
                 blocks: list[dict] = []
                 if self._thinking_on and i == last_asst:
                     blocks.extend(self._thinking_blocks(ev))
-                if ev.content:
+                if ev.content and str(ev.content).strip():
                     blocks.append(self._text_block(ev.content))
                 for c in kept:
                     blocks.append({"type": "tool_use", "id": c.id, "name": c.name,
                                    "input": c.arguments or {}})
                     answered.add(c.id)
+                # never an empty text block (Anthropic 400s on those)
                 messages.append({"role": "assistant",
-                                 "content": blocks or [self._text_block(ev.content or "")]})
+                                 "content": blocks or [self._text_block("(no reply)")]})
             elif ev.role == "tool":
                 # Pair a tool_result only with an assistant tool_use we kept; otherwise
                 # (e.g. compaction split the pair) downgrade to user text so the request
@@ -623,9 +626,13 @@ class AnthropicAdapter:
             # Breakpoint on the stable system prefix caches the whole tools+system prefix...
             system[-1]["cache_control"] = {"type": "ephemeral"}
             # ...and a breakpoint on the last message caches the growing conversation.
+            # Guard: cache_control on an EMPTY text block is itself a 400 - never
+            # mark one (the renderer shouldn't emit any, but stay fail-safe).
             if messages and isinstance(messages[-1].get("content"), list) \
                     and messages[-1]["content"]:
-                messages[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
+                last = messages[-1]["content"][-1]
+                if last.get("type") != "text" or str(last.get("text") or "").strip():
+                    last["cache_control"] = {"type": "ephemeral"}
         body = {
             "model": self.model,
             "max_tokens": self.max_tokens,

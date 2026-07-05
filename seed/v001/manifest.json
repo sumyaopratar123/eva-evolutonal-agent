@@ -38,19 +38,19 @@
     "prompt_audit.py": "opt-in prompt admission audit: deterministic prompt-surface diff + static rules + optional nonce-guarded LLM judge (sensor on promotion, never an anchor)"
   },
   "hashes": {
-    "adapters.py": "bce37841835f091f1d3c04d48591c6ac2ebba138ca96918bc48a4e91288f5e6b",
+    "adapters.py": "2d4835e4f0631321dd2673589cb862fcd5e990cbcfa66729ece38aeddc8a4145",
     "agent.py": "c452afbe7221b93eeab1685be67f0bf4f533858fb057ad991f167d43e983a07f",
     "context.py": "a813ce07a26d52c18e639985770e48f91030c37c03d590509bf4f6bbe43b75b0",
     "core.py": "3f65f6726148816ef27e6118e9b001f8da5b7dba8a0cedd1e2f707eeb60faf35",
     "evals.py": "ee3cf8d30a58d62e546ba8d6ff7f6a2162db7ed71f9bbf2ac6ac86c4f7913da9",
-    "human.py": "d5ad8aff82bca6f5389d0753b4659e9a64d4e4bbfee57943244e58ca55dd0b04",
+    "human.py": "449732b465afd56cbf9e95ce54d7da0455700bd1dbb4a19100e0dce94a88e853",
     "memory.py": "fa0a16a51f5539776133fa50ea5c27101e04ce915c69e74ec6523827194e8458",
     "params.py": "010eecab71ff76622335adc5ac02461ddb64c2e6e01bf78f2b5d0b254fc56634",
     "prompt_audit.py": "4eb66e68aa39727779c1c0b8aab4688f72bd4bb89181c09b2b92d8414237889e",
     "self_model.py": "ae0f904699b712a1c991548e6f1fb6717d9189e12b64580e62a3af7e331274d7",
     "session.py": "1f44e3b491b22d1b40447804a4440d1e9cb40a0784c1e84ad0862c147ead7f45",
     "supervisor.py": "42dfe384ff83ba3859525d6a6dca29b09a5d511c2677f0e371e71d7f347cd9d2",
-    "tests.py": "b51ee025a05f595a5cea8d03a280dd1ad6899e06e291bfe8cff3381323139fe6",
+    "tests.py": "deebb7e886fc20c4716dbcdcceebe6dba0652fb596a54389ea3f3928acae9c47",
     "tools.py": "41e5de33b07256c1c24b54a362816e1c921e35ef6df29e55d4070e3a23f84302",
     "tui.py": "607fdc15887bf0e01537347ba8c67c86525b1517d027261e3b6683ae3c0c376f"
   }

@@ -279,6 +279,17 @@ def check_anthropic_message_pairing():
     # the orphan is NOT emitted as a tool_result (would break the API); downgraded to text
     assert not any(b.get("tool_use_id") == "call_X" for b in results)
     assert any(b.get("type") == "text" and "orphan" in b.get("text", "") for b in blocks)
+    # EMPTY text blocks are never rendered (Anthropic 400s on them, and one empty
+    # block in the history poisons every later request): empty user and assistant
+    # events get a non-empty placeholder instead.
+    evs2 = [core.Event(role="user", content=""),
+            core.Event(role="assistant", content="")]
+    msgs2 = a._render(core.AgentTurn(system="s", events=evs2,
+                                     tools=tools_mod.CANONICAL_TOOLS, mode="work"))
+    for m in msgs2:
+        for b in m["content"]:
+            if b.get("type") == "text":
+                assert str(b.get("text") or "").strip(), f"empty text block rendered: {m}"
 
 
 def _sse(obj):
@@ -1342,6 +1353,12 @@ def check_clipboard_bridge_container_safe():
             ws = pathlib.Path(d)
             # in the container the host clipboard is never read
             assert human_mod.grab_clipboard_image(ws) is None
+            # /paste with NO image anywhere must NOT collapse to an empty message:
+            # an empty user text block is rejected by Anthropic (HTTP 400) and,
+            # once logged, poisons every later request in the session.
+            bare, none_imgs = human_mod.extract_image_attachments("/paste", base_dir=ws)
+            assert none_imgs == [] and bare.strip(), "bare /paste must yield visible text"
+            assert "no screenshot" in bare
             # /paste still resolves a staged screenshot to a provider-neutral image
             (ws / "clip-20200101-000000.png").write_bytes(b"\x89PNG\r\n\x1a\n")
             _, imgs = human_mod.extract_image_attachments("/paste look", base_dir=ws)
