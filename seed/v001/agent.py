@@ -189,8 +189,8 @@ about; do not change anything. Give clear risk notes and next steps.
 - Read-only shell may DISCARD output to /dev/null (e.g. `find . 2>/dev/null`) and pipe
   read-only commands - use ls/find/wc/grep/sed/cat freely to LIST and inspect.
 - Do NOT claim a release diff or changelog you have not actually verified. To report what
-  changed in a release, read the release ledger (../state/release_ledger.jsonl) and the
-  workspace CHANGELOG, and compare files you actually read - never infer "new in vNNN" from
+  changed in a release, read the release ledger (../state/release_ledger.jsonl) or use
+  inspect_self topic=lineage, and compare files you actually read - never infer "new in vNNN" from
   the module list, since most modules already exist in the seed."""
 
 # EVA's self-model: the release it evolves IS its own running code. Rather than
@@ -498,18 +498,12 @@ def default_task_for(mode: str) -> str:
 # Friction backlog (memory of problems) + improve/pivot path
 # --------------------------------------------------------------------------- #
 def ensure_dirs():
+    # Directories only. Workspace seed files (OBJECTIVE.md, read by the supervisor's
+    # autonomous evolve round) are owned by the KERNEL (organism.py init) - a single
+    # writer keeps the default text from drifting between two sources of truth.
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     STATE.mkdir(parents=True, exist_ok=True)
     RELEASES.mkdir(parents=True, exist_ok=True)
-    defaults = {
-        "OBJECTIVE.md": "# Objective\n\nBuild a useful work agent that can safely evolve.\n",
-        "PLAN.md": "# Plan\n\n- Keep a useful work mode.\n- Evolve via small candidate releases.\n",
-        "CHANGELOG.md": "# Changelog\n\n",
-    }
-    for name, content in defaults.items():
-        p = WORKSPACE / name
-        if not p.exists():
-            p.write_text(content, encoding="utf-8")
 
 
 def backlog_append(entry: dict) -> None:
