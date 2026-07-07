@@ -5,8 +5,8 @@
 Register-ArgumentCompleter -Native -CommandName eva -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
     $cmds = @(
-        'build', 'install', 'uninstall', 'setup', 'status', 'work', 'improve', 'review',
-        'evolve', 'rollback', 'unlock', 'reseed', 'paste', 'shell', 'fix-perms', 'help'
+        'build', 'install', 'uninstall', 'setup', 'status', 'changes', 'work', 'improve',
+        'review', 'evolve', 'rollback', 'unlock', 'reseed', 'paste', 'shell', 'fix-perms', 'help'
     )
     $elements = $commandAst.CommandElements
     $completingCommand = ($elements.Count -eq 1) -or ($elements.Count -eq 2 -and $wordToComplete -ne '')
@@ -25,6 +25,7 @@ Register-ArgumentCompleter -Native -CommandName eva -ScriptBlock {
             'work'    { @('resume', '--list') }
             'improve' { @('resume') }
             'review'  { @('resume') }
+            'changes' { @('--all', '--diff') }
             default   { @() }
         }
         $args2 |

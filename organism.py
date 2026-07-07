@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import ast
+import difflib
 import hashlib
 import json
 import os
@@ -94,6 +95,178 @@ def parent_of(release):
         if e.get("kind") == "promoted" and e.get("release") == release:
             parent = e.get("parent")
     return parent
+
+
+# --------------------------------------------------------------------------- #
+# Release traceability (`changes`): what changed between releases, for humans
+# --------------------------------------------------------------------------- #
+def _release_file_hashes(path):
+    """Relative filename -> content hash for every file in a release dir.
+    CRLF-normalized so a Windows checkout never reports phantom diffs."""
+    out = {}
+    for p in sorted(path.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(path).as_posix()
+        if rel.startswith((".", "__pycache__/")) or "/__pycache__/" in rel:
+            continue
+        data = p.read_bytes().replace(b"\r\n", b"\n")
+        out[rel] = hashlib.sha256(data).hexdigest()
+    return out
+
+
+def _release_checks(path):
+    """The ratchet-check names a release's tests.py declares (feature proxy:
+    every promotion that adds behavior pins it with a new check_*)."""
+    tests = path / "tests.py"
+    if not tests.exists():
+        return set()
+    src = tests.read_text(encoding="utf-8", errors="replace")
+    return set(re.findall(r"^def (check_[A-Za-z0-9_]+)\s*\(", src, re.M))
+
+
+def diff_releases(parent_path, release_path):
+    """Structured what-changed summary between two release dirs: file-level
+    added/removed/modified plus the check-name delta from tests.py."""
+    a, b = _release_file_hashes(parent_path), _release_file_hashes(release_path)
+    ca, cb = _release_checks(parent_path), _release_checks(release_path)
+    return {
+        "files_added": sorted(set(b) - set(a)),
+        "files_removed": sorted(set(a) - set(b)),
+        "files_modified": sorted(f for f in set(a) & set(b) if a[f] != b[f]),
+        "checks_added": sorted(cb - ca),
+        "checks_removed": sorted(ca - cb),
+        "checks_total": len(cb),
+    }
+
+
+def _read_norm_lines(path):
+    """A file's lines with CRLF normalized (matches _release_file_hashes), so
+    per-file diffs never show phantom line-ending changes."""
+    try:
+        return path.read_bytes().replace(b"\r\n", b"\n").decode(
+            "utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+
+
+def _file_line_stats(parent_path, release_path, name):
+    """(+added, -removed) line counts for one modified file, or None."""
+    try:
+        a = _read_norm_lines(parent_path / name)
+        b = _read_norm_lines(release_path / name)
+        add = rem = 0
+        for line in difflib.unified_diff(a, b, lineterm="", n=0):
+            if line.startswith("+") and not line.startswith("+++"):
+                add += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                rem += 1
+        return add, rem
+    except Exception:
+        return None
+
+
+def _print_file_diffs(parent_path, release_path, diff, only=None):
+    """Full unified diffs (parent -> release) for the modified/added/removed
+    files; `only` narrows to one filename. Needs both release dirs on disk."""
+    names = (diff.get("files_modified") or []) + (diff.get("files_added") or []) \
+        + (diff.get("files_removed") or [])
+    if only:
+        if only not in names:
+            print(f"\n  (no change in '{only}' - changed files: " + ", ".join(names) + ")")
+            return
+        names = [only]
+    for name in names:
+        a = _read_norm_lines(parent_path / name)
+        b = _read_norm_lines(release_path / name)
+        lines = list(difflib.unified_diff(
+            a, b, fromfile=f"{parent_path.name}/{name}",
+            tofile=f"{release_path.name}/{name}", lineterm=""))
+        if lines:
+            print()
+            print("\n".join(lines))
+
+
+def _print_promotion(row, diff_target=None):
+    """One human-readable block per promotion: who begat whom, why, and what
+    changed. Prefers a live dir-diff; falls back to the summary stored in the
+    ledger row, so history survives even if old release dirs get pruned.
+    `diff_target` ('' = all files, name = one file) adds full unified diffs."""
+    rel = (row.get("release") or "?").rsplit("/", 1)[-1]
+    par = (row.get("parent") or "?").rsplit("/", 1)[-1]
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row.get("time", 0)))
+    print(f"\n{rel}  (from {par})  \u00b7  {when}")
+    reason = (row.get("reason") or "").strip()
+    if reason:
+        print(textwrap.indent(textwrap.fill(reason, width=76), "  "))
+
+    diff = None
+    rel_p, par_p = RELEASES / rel, RELEASES / par
+    live = rel_p.is_dir() and par_p.is_dir()
+    if live:
+        diff = diff_releases(par_p, rel_p)
+    elif row.get("diff"):
+        diff = row["diff"]
+    if not diff:
+        print("  (no diff available: release dirs pruned and no summary in ledger)")
+        return
+    for label, key in (("added", "files_added"), ("modified", "files_modified"),
+                       ("removed", "files_removed")):
+        names = diff.get(key) or []
+        if names:
+            if live and key == "files_modified":
+                # Enrich with per-file line stats while both dirs still exist.
+                parts = []
+                for n in names:
+                    st = _file_line_stats(par_p, rel_p, n)
+                    parts.append(f"{n} (+{st[0]}/-{st[1]})" if st else n)
+                names = parts
+            print(f"  files {label:8s}: " + ", ".join(names))
+    for label, key in (("new checks", "checks_added"), ("dropped checks", "checks_removed")):
+        names = diff.get(key) or []
+        if names:
+            print(f"  {label:14s}: " + ", ".join(names))
+    total = diff.get("checks_total")
+    if total:
+        print(f"  ratchet       : {total} checks")
+    if diff_target is not None:
+        if live:
+            _print_file_diffs(par_p, rel_p, diff, only=diff_target or None)
+        else:
+            print("  (--diff needs both release dirs on disk; one was pruned)")
+
+
+def changes(show_all=False, diff_target=None):
+    """`changes` answers the user's question after a promotion or rollback:
+    WHAT is different now? It walks the ledger (newest first by default) and
+    prints, per promotion, the reason plus the file- and check-level delta.
+    `--diff [file]` adds full unified diffs for the LATEST promotion."""
+    ensure_seed()
+    rows = ledger_rows()
+    promos = [r for r in rows if r.get("kind") == "promoted"]
+    if not promos:
+        print("No promotions yet - the seed release is unchanged.")
+        print("Lineage starts once the first candidate is promoted (improve/evolve).")
+        return
+    current = CURRENT.read_text(encoding="utf-8").strip()
+    print("Current release:", current.rsplit("/", 1)[-1])
+    shown = promos if show_all else promos[-1:]
+    for i, row in enumerate(reversed(shown)):
+        # Full diffs only for the newest promotion - older ones stay summary-only.
+        _print_promotion(row, diff_target=diff_target if i == 0 else None)
+    if show_all:
+        for r in rows:
+            if r.get("kind") == "rollback":
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("time", 0)))
+                print(f"\nrollback  {r.get('from', '?').rsplit('/', 1)[-1]} -> "
+                      f"{r.get('to', '?').rsplit('/', 1)[-1]}  \u00b7  {when}")
+    hints = []
+    if not show_all:
+        hints.append("`changes --all` for the full lineage")
+    if diff_target is None:
+        hints.append("`changes --diff [file]` for the full per-file diff")
+    if hints:
+        print("\n(use " + " \u00b7 ".join(hints) + ")")
 
 
 # --------------------------------------------------------------------------- #
@@ -567,6 +740,31 @@ def _promote_locked(auto_yes=False):
                        "reason": reason})
         return False
 
+    # Make the decision reviewable, not blind: before asking, show WHAT the
+    # candidate actually changes vs the active release (files, line stats, new
+    # checks). Best-effort - a diff failure must never block a gated promotion.
+    try:
+        cur_rel = CURRENT.read_text(encoding="utf-8").strip()
+        _, cur_path = safe_release_rel(cur_rel)
+        _, cand_p = safe_release_rel(candidate)
+        d = diff_releases(cur_path, cand_p)
+        print(f"\nWhat this candidate changes (vs {cur_rel.rsplit('/', 1)[-1]}):")
+        for label, key in (("added", "files_added"), ("modified", "files_modified"),
+                           ("removed", "files_removed")):
+            names = d.get(key) or []
+            if names:
+                if key == "files_modified":
+                    names = [f"{n} (+{st[0]}/-{st[1]})" if (st := _file_line_stats(
+                        cur_path, cand_p, n)) else n for n in names]
+                print(f"  files {label:8s}: " + ", ".join(names))
+        for label, key in (("new checks", "checks_added"), ("dropped checks", "checks_removed")):
+            names = d.get(key) or []
+            if names:
+                print(f"  {label:14s}: " + ", ".join(names))
+        print("  (after promotion: `eva changes --diff [file]` shows the full diff)")
+    except Exception:
+        pass
+
     if not approve("Promote candidate after kernel gate?", auto_yes=auto_yes):
         print("Promotion declined.")
         PROMOTION.unlink()
@@ -595,8 +793,17 @@ def _promote_locked(auto_yes=False):
     CURRENT.write_text(final_rel, encoding="utf-8")
     PROMOTION.unlink()
 
+    # Stamp a what-changed summary INTO the ledger row, so `changes` can still
+    # explain this promotion even after old release dirs are pruned.
+    diff = None
+    try:
+        _, old_path = safe_release_rel(old_rel)
+        diff = diff_releases(old_path, final_path)
+    except Exception:
+        pass
+
     ledger_append({"kind": "promoted", "parent": old_rel, "release": final_rel,
-                   "candidate": candidate, "reason": reason,
+                   "candidate": candidate, "reason": reason, "diff": diff,
                    "requested_by": req.get("requested_by"),
                    "supervisor_qualified": bool(req.get("supervisor_qualified"))})
     log("promoted", {"from": old_rel, "to": final_rel, "candidate": candidate, "reason": reason})
@@ -812,6 +1019,16 @@ def main():
         status()
         return
 
+    if cmd == "changes":
+        diff_target = None
+        rest = args[1:]
+        if "--diff" in rest:
+            i = rest.index("--diff")
+            nxt = rest[i + 1] if i + 1 < len(rest) else ""
+            diff_target = "" if nxt.startswith("--") else nxt
+        changes(show_all="--all" in rest, diff_target=diff_target)
+        return
+
     if cmd == "rollback":
         rollback(force=force)
         return
@@ -870,6 +1087,7 @@ def main():
     print("  python organism.py review [resume]")
     print("  python organism.py evolve --rounds N [--yes] [--allow-shell]")
     print("  python organism.py status")
+    print("  python organism.py changes [--all] [--diff [file]]   # what changed per promotion")
     print("  python organism.py rollback [--force]")
     print("  python organism.py unlock        # clear a dead evolution lock")
     raise SystemExit(2)

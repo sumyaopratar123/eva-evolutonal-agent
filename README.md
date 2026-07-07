@@ -85,8 +85,21 @@ and promotes to a new release whose system deps persist across containers.
 
 Prerequisites: Docker (Engine + Compose v2) running — `docker compose version` to verify.
 
+One-line install (clones to `~/eva`, puts `eva` on PATH, offers to build the image):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/arturkorb3/eva-evolutional-agent/main/install.sh | bash
+```
+
 ```powershell
-.\run.ps1 install       # Linux/macOS:  ./run.sh install
+# Windows (PowerShell)
+iex (irm https://raw.githubusercontent.com/arturkorb3/eva-evolutional-agent/main/install.ps1)
+```
+
+Or from a manual clone: `.\run.ps1 install` (Linux/macOS: `./run.sh install`). Then:
+
+```powershell
 eva                     # first run: a short wizard sets up provider/model/key, then chat
 ```
 
@@ -96,6 +109,7 @@ Just talk to EVA in plain language; `/help` lists in-chat commands. From your sh
 eva improve                        # directed self-change - describe the task in the chat
 eva evolve 3 --yes --allow-shell   # autonomous (Docker contains it)
 eva work resume                    # pick up your last work session (each mode: <mode> resume)
+eva changes                        # what changed per promotion: reason, files, checks (--all · --diff [file])
 eva status  ·  eva rollback  ·  eva help    # ledger · step back · everything else
 ```
 

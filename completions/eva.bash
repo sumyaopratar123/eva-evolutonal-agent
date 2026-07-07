@@ -5,7 +5,7 @@
 _eva_complete() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   if [ "${COMP_CWORD:-1}" -eq 1 ]; then
-    local cmds="build install uninstall setup status work improve review evolve rollback unlock reseed paste shell fix-perms help"
+    local cmds="build install uninstall setup status changes work improve review evolve rollback unlock reseed paste shell fix-perms help"
     COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
     return 0
   fi
@@ -15,6 +15,7 @@ _eva_complete() {
     case "${COMP_WORDS[1]}" in
       work)           COMPREPLY=( $(compgen -W "resume --list" -- "$cur") ) ;;
       improve|review) COMPREPLY=( $(compgen -W "resume" -- "$cur") ) ;;
+      changes)        COMPREPLY=( $(compgen -W "--all --diff" -- "$cur") ) ;;
     esac
   fi
   return 0

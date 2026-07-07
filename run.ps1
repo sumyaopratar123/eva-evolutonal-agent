@@ -391,6 +391,7 @@ switch ($Command) {
     }
     "setup" { Invoke-EvaOnboarding -Force }
     "status" { Invoke-Eva @("status") }
+    "changes" { Invoke-Eva (@("changes") + $Rest) }
     "rollback" { Invoke-Eva (@("rollback") + $Rest) }
     "unlock" { Invoke-Eva @("unlock") }
     "fix-perms" {
@@ -489,6 +490,9 @@ Sessions (modes are chosen at launch):
 
 Organism & sandbox:
   status                Show current / last-good release
+  changes [--all] [--diff [file]]
+                        What changed per promotion: reason, files (+/- lines), checks.
+                        --all: full lineage · --diff: full unified diff (optionally one file)
   rollback [--force]    Roll back to the last good release
   unlock                Clear a dead evolution lock (single-writer guard)
   reseed                Re-seed v001 from seed/ (after editing the genome; no rebuild)

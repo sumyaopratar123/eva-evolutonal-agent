@@ -307,7 +307,7 @@ esac
 # Auto-repair ./data ownership on Linux before any command that runs the sandbox
 # (the container writes as uid 10001; host-owned dirs would fail with PermissionError).
 case "$cmd" in
-  work|improve|review|evolve|status|reseed|shell|rollback|unlock) ensure_data_writable ;;
+  work|improve|review|evolve|status|changes|reseed|shell|rollback|unlock) ensure_data_writable ;;
 esac
 
 case "$cmd" in
@@ -363,6 +363,7 @@ case "$cmd" in
     ;;
   setup)    eva_onboarding force ;;
   status)   eva status ;;
+  changes)  eva changes "$@" ;;
   rollback) eva rollback "$@" ;;
   unlock)   eva unlock ;;
   fix-perms)
@@ -441,6 +442,9 @@ Sessions (modes are chosen at launch):
 
 Organism & sandbox:
   status                Show current / last-good release
+  changes [--all] [--diff [file]]
+                        What changed per promotion: reason, files (+/- lines), checks.
+                        --all: full lineage · --diff: full unified diff (optionally one file)
   rollback [--force]    Roll back to the last good release
   unlock                Clear a dead evolution lock (single-writer guard)
   reseed                Re-seed v001 from seed/ (after editing the genome; no rebuild)
