@@ -279,9 +279,12 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
       <p>System prompts and tool descriptions are screened like code: a candidate's
       prompt-surface diff runs through deterministic rules and, optionally, a nonce-guarded,
       fail-closed LLM judge.</p></div>
-    <div class="card g"><span class="ic">↩️</span><h4>4 · Multi-level rollback</h4>
-      <p>Every promotion lands in the release ledger; <code>rollback</code> walks back through
-      it, one version or several.</p></div>
+    <div class="card g"><span class="ic">↩️</span><h4>4 · Traceability &amp; multi-level rollback</h4>
+      <p>Before the final approval the kernel shows <em>what</em> the candidate changes —
+      files, line stats, new checks. Every promotion lands in the release ledger;
+      <code>eva changes</code> replays the whole lineage (<code>--diff</code> down to per-file
+      unified diffs), and <code>rollback</code> walks back through it, one version or
+      several.</p></div>
   </div>
 </section>
 
@@ -323,11 +326,17 @@ footer a{color:var(--dim)}footer a:hover{color:var(--cyan)}
     <tr><td><code>evolve [N]</code></td><td><b>Autonomous</b> self-change — EVA picks the improvement, announces it, implements N rounds.</td></tr>
     <tr><td><code>&lt;mode&gt; resume</code></td><td>Continue your previous session — each mode keeps its own; <code>work</code> keeps many.</td></tr>
     <tr><td><code>status</code> / <code>rollback</code></td><td>Show the active/last-good release · roll back along the ledger.</td></tr>
+    <tr><td><code>changes</code></td><td>What changed per promotion: reason, files (+/− lines), new checks — <code>--all</code> for the full lineage, <code>--diff [file]</code> for full unified diffs.</td></tr>
     <tr><td><code>reseed</code></td><td>Re-seed <code>v001</code> from <code>seed/</code> after editing the genome (no rebuild).</td></tr>
   </table>
 
   <h3>Quickstart</h3>
-  <pre><code>.\run.ps1 install      # Linux/macOS:  ./run.sh install
+  <pre><code># Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/arturkorb3/eva-evolutional-agent/main/install.sh | bash
+
+# Windows (PowerShell)
+iex (irm https://raw.githubusercontent.com/arturkorb3/eva-evolutional-agent/main/install.ps1)
+
 eva                    # first run: a short wizard sets up provider → model → key, then chat</code></pre>
   <p>Inside a session, just talk to EVA in plain language; <code>/help</code> lists the in-chat
   commands (<code>/model</code> switches the model, <code>/resume</code> picks another work
