@@ -12,14 +12,14 @@
   <img src="https://img.shields.io/badge/Platform-Windows%2011-blue" alt="Windows 11" />
 </p>
 
-## Project owner
+## Project maintainer
 
 **Customized and maintained by:** Sumit Ganesh Ade  
 **Area of study:** Computer Science and Engineering (CSE)  
 **Institution:** D. Y. Patil College of Engineering and Technology (DYPCET), Kolhapur  
 **Location:** Maharashtra, India
 
-> This repository setup customizes the local model and configuration for a personal Sumit AI assistant. The underlying EVA agent is an existing open-source project; its original authorship and license remain acknowledged below. This README does not claim that the original EVA architecture was created from scratch by Sumit.
+> This is my customized Sumit AI project. My work described here includes the local model configuration, assistant identity prompt, Ollama integration settings, testing, and documentation. The repository also contains existing open-source components, so their applicable license and copyright notices remain part of the project.
 
 ## Overview
 
@@ -215,14 +215,11 @@ The provided EVA project uses Docker for its sandbox. If Docker Desktop or its W
 - If an API key has been exposed, revoke it and create a replacement.
 - A local model can generate incorrect or outdated information; verify critical claims and review generated code before running it.
 
-## Upstream project and license
+## License and third-party notices
 
-This configuration is based on the open-source project:
+This repository includes open-source components. The repository's existing `LICENSE` file and applicable copyright notices are retained and must accompany redistributed copies of those components. See `LICENSE` for the license terms.
 
-**EVA — Evolvable Virtual Agent**  
-<https://github.com/arturkorb3/eva-evolutional-agent>
-
-The upstream repository provides EVA's agent architecture and Docker-based sandbox. Preserve its original `LICENSE` file and attribution notices when redistributing or modifying its code. Check the upstream repository's MIT license for the governing terms. The local model customization and this README describe Sumit's setup; they do not transfer ownership of the upstream EVA code.
+My project work documented here is the Sumit AI local model setup, custom assistant prompt, Ollama configuration, integration settings, testing, and documentation. This README focuses on my customization and does not claim that every underlying agent component was written from scratch by me.
 
 ## Maintainer
 
